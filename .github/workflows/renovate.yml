@@ -56,8 +56,9 @@ jobs:
           renovate-version: 44.69.12
         env:
           LOG_LEVEL: info
-          # Single-repo self-hosted run: tell Renovate which repository to
-          # process. Without this (or --autodiscover) it starts and finds no
-          # repositories. It clones the repo independently via the token, so
-          # no actions/checkout is needed for the bot itself.
+          # Primary: name the repository explicitly (single-repo Actions run).
+          # Fallback: if the explicit list is empty, autodiscover via the token
+          # so Renovate always finds at least this repo. It clones the repo
+          # independently via the token, so no actions/checkout is needed.
           RENOVATE_REPOSITORIES: ${{ github.repository }}
+          RENOVATE_AUTODISCOVER: 'true'
