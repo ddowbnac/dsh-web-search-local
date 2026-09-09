@@ -52,6 +52,9 @@ export const Config = z.object({
   maxFileSizeBytes: z.number().step(1).min(0).default(5_000_000),
 });
 
+/** Normalized config object (schema output type) as validated by `Config`. */
+type ConfigValue = ReturnType<typeof Config>;
+
 function expandHome(p: string): string {
   if (p === '~') return homedir();
   if (p.startsWith('~/') || p.startsWith('~\\')) return join(homedir(), p.slice(2));
@@ -103,7 +106,7 @@ function parseExcludes(exclude: readonly string[]): {
   return { excludeDirs: dirs, excludeFiles: files, excludeSuffixes: suffixes };
 }
 
-function resolveOptions(ctx: unknown, config: z.infer<typeof Config>): EngineOptions {
+function resolveOptions(ctx: unknown, config: ConfigValue): EngineOptions {
   const corpusDirs = (config.corpusDirs ?? []).map((d) => expandHome(d));
   const { excludeDirs, excludeFiles, excludeSuffixes } = parseExcludes(config.exclude ?? []);
   return {
@@ -121,7 +124,7 @@ function resolveOptions(ctx: unknown, config: z.infer<typeof Config>): EngineOpt
   };
 }
 
-function resolveWebOptions(config: z.infer<typeof Config>): WebOptions {
+function resolveWebOptions(config: ConfigValue): WebOptions {
   return {
     engine: config.engine ?? 'auto',
     maxResults: config.maxResults ?? 20,
@@ -137,8 +140,8 @@ export function apply(ctx: {
   };
   effect?: (execute: () => (() => void | Promise<void>) | Promise<() => void | Promise<void>>, label?: string) => unknown;
   get?: (name: string) => unknown;
-}, config: z.infer<typeof Config>): void {
-  let current = (): z.infer<typeof Config> => config;
+}, config: ConfigValue): void {
+  let current = (): ConfigValue => config;
   let engine: LocalEngine | undefined;
   let dirty = true;
 
@@ -154,7 +157,7 @@ export function apply(ctx: {
 
   ctx.inject(['settings'], (settingsCtx) => {
     settingsCtx.settings.installSection(ctx, WEB_SEARCH_LOCAL_SETTINGS_NAMESPACE, Config, config, {
-      setSource: (source: () => z.infer<typeof Config>) => {
+      setSource: (source: () => ConfigValue) => {
         current = source;
       },
       onChange: () => {

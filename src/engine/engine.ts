@@ -187,7 +187,10 @@ export function createEngine(opts: EngineOptions, events?: EngineEvents): LocalE
       if (!warmPromise) {
         warmPromise = engine
           .ensure()
-          .catch((e) => events?.onEvent?.({ type: 'engine/warm-error', error: String(e) }));
+          .catch((e) => {
+            events?.onEvent?.({ type: 'engine/warm-error', error: String(e) });
+            return EMPTY;
+          });
       }
     },
     async dispose() {

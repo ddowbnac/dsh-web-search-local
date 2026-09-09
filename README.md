@@ -67,7 +67,7 @@ Both backends are fully local, and the provider's public behavior is identical: 
 - Local corpus engine (`src/engine/`): walks the configured `corpusDirs` (async, bounded worker pool, symlink-safe, per-file skip on error, hard `maxFilesPerBuild` cap), extracts text per extension, and stores it in a single on-disk index (FTS5 on Bun, JSON BM25 on Node, incremental via `manifest.json`).
 - Providers (`src/provider.ts`, `src/fetch-provider.ts`): the `local` search provider returns `file://` sources (informed empty on a 0-document corpus). The `local` fetch provider reads `file://` from disk and wraps `http(s)://` retrieval.
 - Pre-warm + concurrency: the index builds in the background at plugin mount. All index mutation is serialized behind one async mutex, and a re-scan interval avoids re-walking the corpus on every search. The web provider needs no pre-warm because it spawns nothing.
-- Settings + UI: a `web-search-local` section registered through `installSection` (persisted to `$DSH_HOME/settings.yaml`, hot-reloaded) plus an optional browser card under Settings -> Plugins (the platform idiom: the card consumes the `useLocalSearchCard` selector hook and `save`/`discard`/`edit` actions injected by the slot renderer). The card edits engine, corpus dirs, max results, snippet length, index dir, and auto-reindex.
+- Settings + UI: a `web-search-local` section registered through `installSection` (persisted to `$DSH_HOME/settings.yaml`, hot-reloaded) plus an optional browser card under Settings -> Plugins (the platform idiom: the card consumes the `useLocalSearchCard` selector hook and `save`/`discard`/`edit`/`resetField` actions injected by the slot renderer). The card edits engine, corpus dirs, max results, snippet length, index dir, and auto-reindex. It mirrors the platform plugin-card chrome (the stock Shell / Agent loop / Subagent / Web search cards): the same card/header/chevron/footer/field styles on the same design tokens, staged edits with per-field "Overridden" badges and reset-to-default, and a save that writes only on confirm and collapses the card once the write lands.
 
 ---
 
@@ -153,8 +153,10 @@ Two ways to configure:
 ## Build & test
 
 ```
-bun run build     # bun build src/index.ts --target node --format esm --outdir lib, then strip the comments bun injects into the bundle
-bun test          # 145 tests (metasearch core + per-engine parsers + provider, local engine/drivers, plugin shape, client bundle)
+bun run build           # bun build src/index.ts --target node --format esm --outdir lib, then strip the comments bun injects into the bundle
+bun test                # 153 tests (metasearch core + per-engine parsers + provider, local engine/drivers, plugin shape, client bundle)
+bunx tsc --noEmit       # strict typecheck (the sources are type-clean; CI enforces this)
+node scripts/smoke.mjs  # offline functional smoke test of the built bundle (also: bun scripts/smoke.mjs)
 ```
 
 Notes:
@@ -162,6 +164,28 @@ Notes:
 - The build targets Node (the harness runtime). The single `bun:sqlite` reference is a guarded dynamic import, so the bundle links and runs under Node. It is only evaluated when the `Bun` global exists.
 - The build deliberately inlines the peer packages (`@deepseek-ai/*`) and `schemastery`. `schemastery` is not a declared peer, so a bare import would not resolve under a strict pnpm profile layout. The inlined `WebError` is safe because the harness classifies errors by their `.code` property, not cross-package `instanceof`.
 - We hand-emit `lib/client.js` (the browser half) in the `window.__ModuleLoader__.load` lazy-CJS format and ship it as-is.
+
+## CI/CD
+
+GitHub Actions, two workflows in `.github/workflows/`:
+
+### `ci.yml` — runs on every push/PR to `master`
+
+| Job | What it does |
+|---|---|
+| `lint-workflows` | Lints the workflow YAMLs with `actionlint`. |
+| `typecheck` | `bunx tsc --noEmit` under the strict tsconfig. |
+| `test` | `bun test` (153 offline tests) on a Bun `1.3` / `1.4` matrix. |
+| `build` | `bun run build` and uploads the resulting `lib/` as an artifact. |
+| `smoke` | `scripts/smoke.mjs` against the built bundle on a Node `20.x` / `22.x` / Bun `1.4` matrix — verifies the runtime matrix end-to-end offline (Node → JSON BM25 backend, Bun → `bun:sqlite` FTS5): exports, provider registration, a real local-corpus search over a temp corpus, and a `file://` fetch. No network, no `node_modules` (the bundle is dependency-free). |
+
+Install is always `bun install --frozen-lockfile` from the committed `bun.lock`. The build-time `@deepseek-ai/*` packages (seam types, schemastery) are `devDependencies`; the published bundle inlines them, so consumers see zero runtime dependencies.
+
+### `release.yml` — tag-driven release + optional npm publish
+
+- **Trigger:** semver tag push (`v0.2.0`) or `workflow_dispatch` (optional `tag` input; defaults to the `package.json` version, creating and pushing the missing tag).
+- **`release` job:** validates tag ≡ `package.json` version, builds, `bun pm pack` (honors the `files` field), and publishes a GitHub Release with the tarball + `SHA256SUMS.txt` and generated release notes. Prerelease versions are tagged as prereleases.
+- **`publish` job:** `npm publish` to the `@deepseek-ai` scope. Runs **only if the `NPM_TOKEN` repo secret is set** (the scope belongs to the DeepSeek org); without it the workflow still produces the GitHub Release, which is sufficient for the pinned-release install flow.
 
 ## Layout
 
@@ -191,6 +215,10 @@ lib/client.js                    browser UI card (settings.plugin.item)
 lib/types/*.d.ts                 hand-emitted type surface (entry + client)
 scripts/strip-bundle-comments.mjs  post-build step: strips the comments bun build injects into lib/index.js
 test/fixtures/metasearch/        live-captured upstream fixtures (duckduckgo.html, bing.html, wikipedia.json, startpage.html)
+scripts/smoke.mjs                offline functional smoke test for the built bundle (CI runtime matrix; node or bun)
+.github/workflows/ci.yml         CI: actionlint + typecheck + test (bun matrix) + build + smoke (node/bun matrix)
+.github/workflows/release.yml    CD: tag -> validate -> build -> GitHub Release (+ optional npm publish with NPM_TOKEN)
+bun.lock                         committed lockfile (CI installs with --frozen-lockfile)
 cordis.patch.yml                 example integration
 ```
 

@@ -398,9 +398,9 @@ describe('createDuckDuckGoEngine (fixture)', () => {
   test('requests the html endpoint with the Chrome UA + accept header', async () => {
     const seen: Array<{ url: string; headers: Record<string, string> | null }> = [];
     const orig = globalThis.fetch;
-    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    globalThis.fetch = (async (input: string | Request | URL, init?: RequestInit) => {
       seen.push({
-        url: typeof input === 'string' ? input : input.href,
+        url: typeof input === 'string' ? input : input instanceof URL ? input.href : input.url,
         headers: (init?.headers ?? null) as Record<string, string> | null,
       });
       return new Response('<a class="result__a" href="https://x.example/">t</a>', { status: 200 });

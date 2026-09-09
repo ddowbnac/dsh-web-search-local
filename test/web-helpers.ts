@@ -64,7 +64,7 @@ export interface FetchMock {
 export function installFetchMock(handler: (url: string) => FetchMockResponse): FetchMock {
   const calls: string[] = [];
   const orig = globalThis.fetch;
-  globalThis.fetch = (async (input: RequestInfo | URL, _init?: RequestInit) => {
+  globalThis.fetch = (async (input: string | Request | URL, _init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
     calls.push(url);
     const r = handler(url);

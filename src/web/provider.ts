@@ -1,5 +1,10 @@
 import { WebError } from '@deepseek-ai/dsh-web';
-import type { WebSearchProvider, WebSearchRequest, WebSearchResult, WebSearchSource } from '@deepseek-ai/dsh-web';
+import type {
+  WebSearchProvider as WebSearchProviderSeam,
+  WebSearchRequest,
+  WebSearchResult,
+  WebSearchSource,
+} from '@deepseek-ai/dsh-web';
 import { runMetasearch } from './metasearch/orchestrator.js';
 import type { EngineDiagnostic, MetasearchHit, SearchEngine } from './metasearch/types.js';
 import { MetasearchError } from './metasearch/types.js';
@@ -37,7 +42,7 @@ export interface MetasearchReport {
   readonly served: number;
 }
 
-export class WebSearchProvider implements WebSearchProvider {
+export class WebSearchProvider implements WebSearchProviderSeam {
   readonly id = WEB_SEARCH_PROVIDER_ID;
   private readonly getOpts: () => WebOptions;
   private report: MetasearchReport | null = null;
@@ -131,8 +136,12 @@ function toSources(hits: ReadonlyArray<MetasearchHit>, maxResults: number): WebS
   const out: WebSearchSource[] = [];
   for (const h of hits) {
     if (out.length >= maxResults) break;
-    const source: WebSearchSource = { url: h.url, title: h.title, snippet: h.snippet };
-    if (h.publishedAt) source.publishedAt = h.publishedAt;
+    const source: WebSearchSource = {
+      url: h.url,
+      title: h.title,
+      snippet: h.snippet,
+      ...(h.publishedAt ? { publishedAt: h.publishedAt } : {}),
+    };
     out.push(source);
   }
   return out;

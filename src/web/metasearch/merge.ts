@@ -100,8 +100,12 @@ export function mergeAndInterleave(
     );
     for (const m of tier) {
       emitted.add(m);
-      const hit: MetasearchHit = { url: m.url, title: m.title, snippet: m.snippet };
-      if (m.publishedAt) hit.publishedAt = m.publishedAt;
+      const hit: MetasearchHit = {
+        url: m.url,
+        title: m.title,
+        snippet: m.snippet,
+        ...(m.publishedAt ? { publishedAt: m.publishedAt } : {}),
+      };
       out.push(hit);
       if (out.length >= maxResults) break outer;
     }

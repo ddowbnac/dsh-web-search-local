@@ -13,6 +13,13 @@ function isAbort(e: unknown): boolean {
   return e instanceof Error && e.message === 'aborted';
 }
 
+// Fresh read per call: TS narrows `signal?.aborted` after the pre-await check, so a
+// direct re-comparison would be flagged as having no overlap even though the signal
+// may have been aborted during the await.
+function isSignalAborted(signal?: AbortSignal): boolean {
+  return signal?.aborted === true;
+}
+
 export class LocalSearchProvider implements WebSearchProvider {
   readonly id = LOCAL_SEARCH_PROVIDER_ID;
   private readonly getEngine: () => LocalEngine;
@@ -26,7 +33,7 @@ export class LocalSearchProvider implements WebSearchProvider {
   }
 
   async search(request: WebSearchRequest, signal?: AbortSignal): Promise<WebSearchResult> {
-    if (signal?.aborted === true) throw new WebError('Local search aborted', 'WEB_ABORTED', { cause: signal?.reason });
+    if (isSignalAborted(signal)) throw new WebError('Local search aborted', 'WEB_ABORTED', { cause: signal?.reason });
     let engine: LocalEngine;
     try {
       engine = this.getEngine();
@@ -37,7 +44,7 @@ export class LocalSearchProvider implements WebSearchProvider {
     try {
       hits = await engine.search(request.query, request.maxResults ?? 20, signal);
     } catch (e) {
-      if (signal?.aborted === true || isAbort(e)) {
+      if (isSignalAborted(signal) || isAbort(e)) {
         throw new WebError('Local search aborted', 'WEB_ABORTED', { cause: signal?.reason ?? e });
       }
       throw new WebError(`Local search failed: ${String(e)}`, 'WEB_PROVIDER_ERROR', { cause: e });

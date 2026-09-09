@@ -25,6 +25,12 @@
     "README.md"
   ],
   "license": "MIT",
+  "devDependencies": {
+    "@deepseek-ai/dsh-web": "^0.1.2-rc.1",
+    "@deepseek-ai/schemastery": "^3.18.2",
+    "bun-types": "^1.4.2",
+    "typescript": "~5.9.0"
+  },
   "dsh": {
     "client": {
       "platform": "web",
