@@ -1,0 +1,12 @@
+node_modules/
+.tmp/
+lib/index.js
+*.tmp
+*.db
+*.db-wal
+*.db-shm
+index.fallback.json
+manifest.json
+.DS_Store
+.scratch
+.research
