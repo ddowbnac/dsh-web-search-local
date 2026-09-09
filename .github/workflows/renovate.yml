@@ -47,9 +47,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
       - name: Run Renovate
         uses: renovatebot/github-action@v46.2.6
         with:
@@ -59,3 +56,8 @@ jobs:
           renovate-version: 44.69.12
         env:
           LOG_LEVEL: info
+          # Single-repo self-hosted run: tell Renovate which repository to
+          # process. Without this (or --autodiscover) it starts and finds no
+          # repositories. It clones the repo independently via the token, so
+          # no actions/checkout is needed for the bot itself.
+          RENOVATE_REPOSITORIES: ${{ github.repository }}
