@@ -1,7 +1,7 @@
 {
   "name": "@deepseek-ai/dsh-web-search-local",
   "description": "Web-search provider for the DeepSeek Harness (ctx.web): real internet search via a built-in in-process metasearch or DuckDuckGo only, no external API key, no external instance, zero runtime dependencies, plus an optional fully-local corpus full-text index.",
-  "version": "0.2.0",
+  "version": "1.0.0",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",
