@@ -16,10 +16,12 @@
 #
 # Secrets:
 #   * NPM_TOKEN (repo secret, OPTIONAL) - a token with publish rights to the
-#     `@deepseek-ai` scope on npmjs.com. When absent, the `publish` job is
-#     skipped (gated by `if: secrets.NPM_TOKEN != ''`). The GitHub Release is
-#     ALWAYS produced and is the primary deliverable: consumers install from a
-#     pinned release / tarball (via `dsh plugin add <path>` or `file:` entries).
+#     `@deepseek-ai` scope on npmjs.com. When absent, every step of the
+#     `publish` job is skipped (the `secrets` context is not usable in `if:`,
+#     so presence is resolved in a step and later steps gate on its output).
+#     The GitHub Release is ALWAYS produced and is the primary deliverable:
+#     consumers install from a pinned release / tarball (via
+#     `dsh plugin add <path>` or `file:` entries).
 #
 # Permissions are minimal: `contents: write` only (create the tag on dispatch +
 # upload the release assets). No `id-token`/`packages`/etc.
@@ -156,34 +158,56 @@ jobs:
         # prerelease cannot be classified from the tag alone (ref_name is a
         # branch). Pass the tag explicitly (e.g. v0.3.1-beta) to mark prerelease.
 
-  # Optional npm publish. Skipped entirely when NPM_TOKEN is unset, so the
-  # workflow works without org publish rights (the GitHub Release still ships).
-  # Raw `npm publish` is used (rather than a wrapper action) for transparency:
-  # one command whose behavior is fully controlled here.
+  # Optional npm publish. Works without org publish rights: when the NPM_TOKEN
+  # repo secret is unset, the first step records hasToken=false and every other
+  # step is skipped (the GitHub Release still ships the package).
+  #
+  # NOTE: the `secrets` context is NOT available in `if:` (job- or step-level),
+  # so the token's presence is resolved in the first step and later steps gate
+  # on that step's output instead. Raw `npm publish` (no wrapper action) keeps
+  # the command fully controlled.
   publish:
     needs: release
     runs-on: ubuntu-latest
-    if: ${{ secrets.NPM_TOKEN != '' }}
     steps:
-      - name: Checkout
+      - name: Check for NPM_TOKEN
+        id: token
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -n "$NPM_TOKEN" ]; then
+            echo "NPM_TOKEN present - publishing to npm"
+            echo "hasToken=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "NPM_TOKEN not set - skipping npm publish (GitHub Release already has the package)"
+            echo "hasToken=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - if: steps.token.outputs.hasToken == 'true'
+        name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Bun
+      - if: steps.token.outputs.hasToken == 'true'
+        name: Set up Bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: '1.4'
 
-      - name: Install dependencies (frozen lockfile)
+      - if: steps.token.outputs.hasToken == 'true'
+        name: Install dependencies (frozen lockfile)
         run: bun install --frozen-lockfile
 
-      - name: Build
+      - if: steps.token.outputs.hasToken == 'true'
+        name: Build
         run: bun run build
 
       # Publish the root package (npm honors the `files` field). The @deepseek-ai
       # scope + MIT license -> publish publicly. Provenance is intentionally
       # omitted: it requires `id-token: write`, which this workflow's minimal
       # permission set does not grant.
-      - name: Publish to npm
+      - if: steps.token.outputs.hasToken == 'true'
+        name: Publish to npm
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
