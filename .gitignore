@@ -1,6 +1,9 @@
 node_modules/
 .tmp/
 lib/index.js
+# Guard: this repo is Bun-first (bun.lock). Never commit an npm lockfile, even
+# if a tool (e.g. semantic-release's npm prepare step) runs `npm` locally.
+package-lock.json
 *.tmp
 *.db
 *.db-wal
