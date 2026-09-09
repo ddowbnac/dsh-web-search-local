@@ -33,21 +33,40 @@ const stubReact = {
 
 let loaded: { id: string; factory: (require: (name: string) => unknown) => any } | null = null;
 
-function makeCtx(scopeValue: unknown, status: 'ready' | 'unavailable' = 'ready') {
+function makeCtx(
+  scopeValue: unknown,
+  status: 'ready' | 'unavailable' = 'ready',
+  user?: Record<string, unknown>,
+  base?: Record<string, unknown>,
+  writable = true,
+) {
+  const state = {
+    status,
+    value: scopeValue,
+    base,
+    user: user ?? undefined,
+    writable,
+    revision: 1,
+    mode: 'host',
+  };
   const slotRegs: SlotReg[] = [];
   const localeReg: Record<string, unknown> = {};
   const sets: Array<[string, unknown]> = [];
+  const unsets: string[] = [];
   const scopeStub = {
-    getSnapshot: () => ({
-      status,
-      value: scopeValue,
-      writable: true,
-      revision: 1,
-      mode: 'host',
-    }),
+    getSnapshot: () => state,
     subscribe: () => () => {},
-    set: async (key: string, value: unknown) => void sets.push([key, value]),
-    unset: async () => {},
+    set: async (key: string, value: unknown) => {
+      sets.push([key, value]);
+      state.user = { ...(state.user ?? {}), [key]: value };
+      state.value = { ...(state.value ?? {}), [key]: value };
+    },
+    unset: async (key: string) => {
+      unsets.push(key);
+      const u = { ...(state.user ?? {}) };
+      delete u[key];
+      state.user = u;
+    },
     mutate: async () => {},
   };
   const ctx = {
@@ -66,7 +85,7 @@ function makeCtx(scopeValue: unknown, status: 'ready' | 'unavailable' = 'ready')
       register: (spec: any, comp: any) => ({ spec, comp }),
     },
   };
-  return { ctx, slotRegs, localeReg, sets };
+  return { ctx, slotRegs, localeReg, sets, unsets, state };
 }
 
 function walk(el: any): any[] {
@@ -82,6 +101,21 @@ function walk(el: any): any[] {
   return out;
 }
 
+function texts(el: any): string[] {
+  const out: string[] = [];
+  const stack = [el];
+  while (stack.length) {
+    const n = stack.pop();
+    if (n == null) continue;
+    if (typeof n === 'string') {
+      out.push(n);
+      continue;
+    }
+    if (typeof n === 'object') for (const c of n.children ?? []) stack.push(c);
+  }
+  return out;
+}
+
 function rendererProps(face: any, t: (k: string) => string): any {
   const store = face.hooks.localSearchCard;
   return {
@@ -90,6 +124,7 @@ function rendererProps(face: any, t: (k: string) => string): any {
     save: face.save,
     discard: face.discard,
     edit: face.edit,
+    resetField: face.resetField,
   };
 }
 
@@ -149,14 +184,18 @@ describe('client bundle (lib/client.js)', () => {
     expect(typeof face.save).toBe('function');
     expect(typeof face.discard).toBe('function');
     expect(typeof face.edit).toBe('function');
+    expect(typeof face.resetField).toBe('function');
 
     const snap = face.hooks.localSearchCard.getSnapshot();
     expect(snap.available).toBe(true);
-    expect(snap.engine).toBe('searxng');
-    expect(snap.corpusDirs).toBe('/a\n/b');
-    expect(snap.maxResults).toBe('8');
-    expect(snap.snippetLength).toBe('120');
-    expect(snap.autoReindex).toBe(true);
+    expect(snap.engine.text).toBe('searxng');
+    expect(snap.engine.overridden).toBe(false);
+    expect(snap.corpusDirs.text).toBe('/a\n/b');
+    expect(snap.maxResults.text).toBe('8');
+    expect(snap.snippetLength.text).toBe('120');
+    expect(snap.autoReindex.checked).toBe(true);
+    expect(snap.autoReindex.overridden).toBe(false);
+    expect(snap.dirty).toBe(false);
   });
 
   test('engine defaults to auto when absent from the scope value', () => {
@@ -165,7 +204,7 @@ describe('client bundle (lib/client.js)', () => {
     mod.apply(ctx as any);
     const face = slotRegs[0].spec.inject();
     const snap = face.hooks.localSearchCard.getSnapshot();
-    expect(snap.engine).toBe('auto');
+    expect(snap.engine.text).toBe('auto');
   });
 
   test('component renders the collapsed header, then expands to the form fields', () => {
@@ -181,9 +220,14 @@ describe('client bundle (lib/client.js)', () => {
     expect(el).not.toBeNull();
     let nodes = walk(el);
     expect(nodes.map((n) => n?.props?.id).filter(Boolean)).not.toContain('wsl-corpus');
-
-    const header = nodes.find((n) => n?.type === 'button' && typeof n?.props?.onClick === 'function');
+    // the platform card chrome is present: header button with the disclosure label
+    const header = nodes.find((n) => n?.props?.className === 'wslc_header');
     expect(header).toBeDefined();
+    expect(header.props['aria-expanded']).toBe(false);
+    expect(header.props['aria-label']).toBe('expand: title');
+    const card = walk(el).find((n) => n?.props?.className === 'wslc_card');
+    expect(card).toBeDefined();
+
     (header.props.onClick as () => void)();
     el = render(reg.comp, rendererProps(face, t));
     nodes = walk(el);
@@ -202,6 +246,9 @@ describe('client bundle (lib/client.js)', () => {
     expect(options).toEqual(['auto', 'duckduckgo', 'searxng']);
     const textarea = nodes.find((n) => n?.props?.id === 'wsl-corpus');
     expect(textarea.props.value).toBe('/a');
+    // save/discard buttons carry the platform classes
+    expect(nodes.some((n) => n?.props?.className === 'wslc_save')).toBe(true);
+    expect(nodes.some((n) => n?.props?.className === 'wslc_discard')).toBe(true);
   });
 
   test('editing through the injected action republishes the store snapshot', () => {
@@ -217,10 +264,10 @@ describe('client bundle (lib/client.js)', () => {
 
     face.edit('maxResults', '9');
     expect(store.getSnapshot().dirty).toBe(true);
-    expect(store.getSnapshot().maxResults).toBe('9');
+    expect(store.getSnapshot().maxResults.text).toBe('9');
 
     const el1 = render(reg.comp, rendererProps(face, t));
-    const header = walk(el1).find((n) => n?.type === 'button' && typeof n?.props?.onClick === 'function');
+    const header = walk(el1).find((n) => n?.props?.className === 'wslc_header');
     expect(header).toBeDefined();
     (header.props.onClick as () => void)();
     const el2 = render(reg.comp, rendererProps(face, t));
@@ -242,13 +289,126 @@ describe('client bundle (lib/client.js)', () => {
     expect(face.hooks.localSearchCard.getSnapshot().dirty).toBe(false);
   });
 
+  test('an edit equal to the current value is not dirty (no-op skip)', () => {
+    const mod = loaded!.factory((name: string) => (name === 'react' ? stubReact : {}));
+    const { ctx, slotRegs } = makeCtx({ engine: 'auto' });
+    mod.apply(ctx as any);
+    const face = slotRegs[0].spec.inject();
+    face.edit('engine', 'auto');
+    expect(face.hooks.localSearchCard.getSnapshot().dirty).toBe(false);
+  });
+
+  test('a user-layer override shows the Overridden badge; reset stages a clear', async () => {
+    const mod = loaded!.factory((name: string) => (name === 'react' ? stubReact : {}));
+    const { ctx, slotRegs, unsets } = makeCtx({ engine: 'duckduckgo', maxResults: 5 }, 'ready', { engine: 'duckduckgo' });
+    mod.apply(ctx as any);
+    const face = slotRegs[0].spec.inject();
+    const snap = face.hooks.localSearchCard.getSnapshot();
+    expect(snap.engine.overridden).toBe(true);
+
+    // reset stages a clear back to the composition default (auto)
+    face.resetField('engine');
+    const staged = face.hooks.localSearchCard.getSnapshot();
+    expect(staged.engine.text).toBe('auto');
+    expect(staged.engine.overridden).toBe(false);
+    expect(staged.dirty).toBe(true);
+
+    await face.save();
+    expect(unsets).toContain('engine');
+    expect(face.hooks.localSearchCard.getSnapshot().dirty).toBe(false);
+  });
+
+  test('a reset uses the composition base when one exists', () => {
+    const mod = loaded!.factory((name: string) => (name === 'react' ? stubReact : {}));
+    const { ctx, slotRegs } = makeCtx(
+      { engine: 'duckduckgo' },
+      'ready',
+      { engine: 'duckduckgo' },
+      { engine: 'searxng' },
+    );
+    mod.apply(ctx as any);
+    const face = slotRegs[0].spec.inject();
+    face.resetField('engine');
+    expect(face.hooks.localSearchCard.getSnapshot().engine.text).toBe('searxng');
+  });
+
+  test('an invalid number marks the form invalid and blocks the save', async () => {
+    const mod = loaded!.factory((name: string) => (name === 'react' ? stubReact : {}));
+    const { ctx, slotRegs, sets } = makeCtx({ maxResults: 5 });
+    mod.apply(ctx as any);
+    const face = slotRegs[0].spec.inject();
+    face.edit('maxResults', 'abc');
+    const snap = face.hooks.localSearchCard.getSnapshot();
+    expect(snap.invalid).toBe(true);
+    expect(snap.dirty).toBe(true);
+    expect(snap.maxResults.invalid).toBe(true);
+
+    await face.save();
+    expect(sets).toHaveLength(0);
+    expect(face.hooks.localSearchCard.getSnapshot().dirty).toBe(true);
+    expect(face.hooks.localSearchCard.getSnapshot().invalid).toBe(true);
+  });
+
+  test('emptying a text field that carries an override writes a clear on save', async () => {
+    const mod = loaded!.factory((name: string) => (name === 'react' ? stubReact : {}));
+    const { ctx, slotRegs, unsets } = makeCtx(
+      { indexDir: 'D:/idx' },
+      'ready',
+      { indexDir: 'D:/idx' },
+    );
+    mod.apply(ctx as any);
+    const face = slotRegs[0].spec.inject();
+    expect(face.hooks.localSearchCard.getSnapshot().indexDir.overridden).toBe(true);
+    face.edit('indexDir', '');
+    expect(face.hooks.localSearchCard.getSnapshot().dirty).toBe(true);
+    await face.save();
+    expect(unsets).toContain('indexDir');
+  });
+
+  test('emptying a field with no override is a no-op (stays clean)', () => {
+    const mod = loaded!.factory((name: string) => (name === 'react' ? stubReact : {}));
+    const { ctx, slotRegs } = makeCtx({ indexDir: '' });
+    mod.apply(ctx as any);
+    const face = slotRegs[0].spec.inject();
+    face.edit('indexDir', '');
+    expect(face.hooks.localSearchCard.getSnapshot().dirty).toBe(false);
+  });
+
+  test('discard drops staged edits and returns to the stored values', () => {
+    const mod = loaded!.factory((name: string) => (name === 'react' ? stubReact : {}));
+    const { ctx, slotRegs } = makeCtx({ maxResults: 5 });
+    mod.apply(ctx as any);
+    const face = slotRegs[0].spec.inject();
+    face.edit('maxResults', '9');
+    expect(face.hooks.localSearchCard.getSnapshot().dirty).toBe(true);
+    face.discard();
+    const snap = face.hooks.localSearchCard.getSnapshot();
+    expect(snap.dirty).toBe(false);
+    expect(snap.maxResults.text).toBe('5');
+  });
+
   test('component hides itself when the namespace is unavailable (defensive)', () => {
     const mod = loaded!.factory((name: string) => (name === 'react' ? stubReact : {}));
     const { ctx, slotRegs } = makeCtx(undefined, 'unavailable');
     mod.apply(ctx as any);
     const reg = slotRegs[0];
     newRenderSession();
-    const el = render(reg.comp, rendererProps(reg.spec.inject(), (k: string) => k));
+    const el = render(reg.comp, rendererProps(reg.spec.inject(), (k) => k));
     expect(el).toBeNull();
+  });
+
+  test('the read-only deployment note renders when the scope is not writable', () => {
+    const mod = loaded!.factory((name: string) => (name === 'react' ? stubReact : {}));
+    const { ctx, slotRegs } = makeCtx({ maxResults: 5 }, 'ready', undefined, undefined, false);
+    mod.apply(ctx as any);
+    const reg = slotRegs[0];
+    const face = reg.spec.inject();
+    const t = (k: string) => k;
+    newRenderSession();
+    let el = render(reg.comp, rendererProps(face, t));
+    const header = walk(el).find((n) => n?.props?.className === 'wslc_header');
+    (header.props.onClick as () => void)();
+    el = render(reg.comp, rendererProps(face, t));
+    expect(texts(el).join(' ')).toContain('readOnly');
   });
 });
