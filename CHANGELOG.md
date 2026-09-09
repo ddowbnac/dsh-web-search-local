@@ -1,3 +1,13 @@
+# 1.0.0 (2026-09-09)
+
+
+### Bug Fixes
+
+* **ci:** regenerate bun.lock as lockfileVersion 1 (bun 1.3-compatible) ([c43db29](https://github.com/ddowbnac/dsh-web-search-local/commit/c43db29253d9c361bbecb162fc08af3842c52eb1))
+* match web-search-local card to the platform plugin-card chrome ([2830dcf](https://github.com/ddowbnac/dsh-web-search-local/commit/2830dcff375389b0eae92e71e4d6166fd4d011ae))
+* **release:** secrets context is invalid in if: — gate npm publish via step output ([1065c11](https://github.com/ddowbnac/dsh-web-search-local/commit/1065c11eb31ae8f43e2cf9010efe9d2d4652fef8))
+* **release:** switch to angular preset to fix writer-9 conflict in generateNotes ([0cb79eb](https://github.com/ddowbnac/dsh-web-search-local/commit/0cb79eb3bc7c73626b7b918d9d41e31c073a329d))
+
 # Changelog
 
 All notable changes to this project will be documented in this file.
