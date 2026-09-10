@@ -36,7 +36,7 @@
     "@semantic-release/release-notes-generator": "14.1.1",
     "bun-types": "^1.4.2",
     "semantic-release": "25.0.9",
-    "typescript": "~5.9.0"
+    "typescript": "~7.0.2"
   },
   "dsh": {
     "bundle": {
