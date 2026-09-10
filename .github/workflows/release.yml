@@ -16,7 +16,7 @@
 #
 # Secrets:
 #   * NPM_TOKEN (repo secret, OPTIONAL) - a token with publish rights to the
-#     `@deepseek-ai` scope on npmjs.com. When absent, every step of the
+#     `@djdowbnac` scope on npmjs.com. When absent, every step of the
 #     `publish` job is skipped (the `secrets` context is not usable in `if:`,
 #     so presence is resolved in a step and later steps gate on its output).
 #     The GitHub Release is ALWAYS produced and is the primary deliverable:
@@ -126,14 +126,14 @@ jobs:
           test -f lib/index.js   # sanity: the inlined ESM bundle exists
 
       # Pack the publishable surface (honors the `files` field) and checksum it.
-      # `bun pm pack` emits deepseek-ai-dsh-web-search-local-<version>.tgz in the
+      # `bun pm pack` emits djdowbnac-dsh-web-search-local-<version>.tgz in the
       # working dir. We pin that deterministic name so the checksum + release
       # asset are unambiguous.
       - name: Pack and checksum
         run: |
           set -euo pipefail
           bun pm pack
-          TARBALL="deepseek-ai-dsh-web-search-local-${VERSION}.tgz"
+          TARBALL="djdowbnac-dsh-web-search-local-${VERSION}.tgz"
           test -f "$TARBALL"
           sha256sum "$TARBALL" > SHA256SUMS.txt
           echo "Packed: $TARBALL"
@@ -202,7 +202,7 @@ jobs:
         name: Build
         run: bun run build
 
-      # Publish the root package (npm honors the `files` field). The @deepseek-ai
+      # Publish the root package (npm honors the `files` field). The @djdowbnac
       # scope + MIT license -> publish publicly. Provenance is intentionally
       # omitted: it requires `id-token: write`, which this workflow's minimal
       # permission set does not grant.

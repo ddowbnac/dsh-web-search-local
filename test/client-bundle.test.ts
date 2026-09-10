@@ -146,7 +146,7 @@ describe('client bundle (lib/client.js)', () => {
 
   test('registers via window.__ModuleLoader__.load with the right id', () => {
     expect(loaded).not.toBeNull();
-    expect(loaded!.id).toBe('@deepseek-ai/dsh-web-search-local');
+    expect(loaded!.id).toBe('@djdowbnac/dsh-web-search-local');
     expect(typeof loaded!.factory).toBe('function');
   });
 

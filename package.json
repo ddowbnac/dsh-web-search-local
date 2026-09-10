@@ -1,5 +1,5 @@
 {
-  "name": "@deepseek-ai/dsh-web-search-local",
+  "name": "@djdowbnac/dsh-web-search-local",
   "description": "Web-search provider for the DeepSeek Harness (ctx.web): real internet search via a built-in in-process metasearch or DuckDuckGo only, no external API key, no external instance, zero runtime dependencies, plus an optional fully-local corpus full-text index.",
   "version": "1.1.0",
   "type": "module",
@@ -26,6 +26,9 @@
     "README.md"
   ],
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
   "devDependencies": {
     "@deepseek-ai/dsh-web": "^0.1.2-rc.1",
     "@deepseek-ai/schemastery": "^3.18.2",

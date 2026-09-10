@@ -1,4 +1,4 @@
-# Bundle patch for @deepseek-ai/dsh-web-search-local — applied automatically.
+# Bundle patch for @djdowbnac/dsh-web-search-local — applied automatically.
 #
 # This file is declared in package.json under `dsh.bundle.patch`, so
 # `dsh plugin --profile <name> add <this package>` registers the package in
@@ -25,7 +25,7 @@
 # corpus search instead, override `searchProvider: local` in the user layer.
 - insert:
     - id: web-search-local
-      name: '@deepseek-ai/dsh-web-search-local'
+      name: '@djdowbnac/dsh-web-search-local'
       config:
         # Web backend: auto | duckduckgo | searxng (searxng = built-in metasearch).
         # Defaults to auto; override in the user layer to change.

@@ -1,4 +1,4 @@
-# @deepseek-ai/dsh-web-search-local
+# @djdowbnac/dsh-web-search-local
 
 A web-search provider for the DeepSeek Harness (`ctx.web`). It lets `web_search` query the real internet without a DeepSeek/Exa/Perplexity account or an API key, and it adds an optional fully local full-text index over your own files.
 
@@ -87,11 +87,11 @@ From the plugin's checkout directory:
 dsh plugin --profile web add .
 ```
 
-That is the whole install. `dsh plugin` initializes the profile on first use and forwards to `pnpm add` inside the profile directory (pnpm must be on PATH). A local directory becomes a pnpm local dependency, so the profile resolves the package name `@deepseek-ai/dsh-web-search-local` to this checkout. An explicit path works too (`dsh plugin --profile web add <path>/dhs-web-search-local`, `file:`/`link:` forms included).
+That is the whole install. `dsh plugin` initializes the profile on first use and forwards to `pnpm add` inside the profile directory (pnpm must be on PATH). A local directory becomes a pnpm local dependency, so the profile resolves the package name `@djdowbnac/dsh-web-search-local` to this checkout. An explicit path works too (`dsh plugin --profile web add <path>/dhs-web-search-local`, `file:`/`link:` forms included).
 
 Because the package declares `dsh.bundle.patch` (its shipped `cordis.patch.yml`), `dsh plugin` registers it in the profile's `dsh.profile.bundles` as part of the same command — the integration rows (the `web-search-local` plugin row and the `web` provider pin) mount automatically on every boot. There is no manual `cordis.patch.yml` step.
 
-Remove it with `dsh plugin --profile web remove @deepseek-ai/dsh-web-search-local`: the same reconciliation drops the bundle layer, so the mount goes away with the dependency.
+Remove it with `dsh plugin --profile web remove @djdowbnac/dsh-web-search-local`: the same reconciliation drops the bundle layer, so the mount goes away with the dependency.
 
 The dependency is a local link, so the profile always loads the current checkout. After editing sources, re-run `bun run build` for the change to take effect.
 

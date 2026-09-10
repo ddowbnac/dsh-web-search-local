@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "@deepseek-ai/dsh-web-search-local",
+      "name": "@djdowbnac/dsh-web-search-local",
       "devDependencies": {
         "@deepseek-ai/dsh-web": "^0.1.2-rc.1",
         "@deepseek-ai/schemastery": "^3.18.2",
