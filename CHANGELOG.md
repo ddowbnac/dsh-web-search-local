@@ -1,3 +1,10 @@
+## [1.1.2](https://github.com/ddowbnac/dsh-web-search-local/compare/v1.1.1...v1.1.2) (2026-09-10)
+
+
+### Bug Fixes
+
+* **release:** write NPM_TOKEN to runner .npmrc before publish ([601a58b](https://github.com/ddowbnac/dsh-web-search-local/commit/601a58b6ef63e47bb4b9c048da9b9a6104b025b4))
+
 # [1.1.0](https://github.com/ddowbnac/dsh-web-search-local/compare/v1.0.0...v1.1.0) (2026-09-10)
 
 
