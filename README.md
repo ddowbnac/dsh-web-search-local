@@ -177,7 +177,7 @@ Notes:
 
 ## CI/CD
 
-GitHub Actions, four workflows in `.github/workflows/`:
+GitHub Actions, three workflows in `.github/workflows/` (plus GitHub-native Dependabot for dependency updates):
 
 ```
 push to master (conventional commits)
@@ -186,7 +186,7 @@ push to master (conventional commits)
                └─> release.yml  validate tag≡version -> build -> pack
                                  -> GitHub Release (+ optional npm publish)
 
-renovate.yml (independent)       opens "chore(deps):" PRs (never trigger a release)
+dependabot (independent)         opens "chore(deps):" PRs (bun ecosystem, never trigger a release)
 ```
 
 The release pipeline is split into two stages on purpose: **`semantic-release.yml`** owns *versioning + tagging* (from conventional commits) and **`release.yml`** owns *packaging + publishing*. They hand off through the `v*` tag, and the `tag ≡ package.json version` check in `release.yml` still holds because semantic-release bumps `package.json` **before** it pushes the tag.
@@ -205,7 +205,7 @@ Install is always `bun install --frozen-lockfile` from the committed `bun.lock`.
 
 ### `semantic-release.yml` — stage 1: versioning + tagging from conventional commits
 
-- **Trigger:** every `push` to `master`. Release type comes from the [conventional-commits](https://www.conventionalcommits.org/) preset: `feat:` → minor, `fix:`/`perf:` → patch, `BREAKING CHANGE` → major. Any other type (`chore:`, `docs:`, …) produces **no release** — this is why Renovate's `chore(deps):` merges never bump the version.
+- **Trigger:** every `push` to `master`. Release type comes from the [conventional-commits](https://www.conventionalcommits.org/) preset: `feat:` → minor, `fix:`/`perf:` → patch, `BREAKING CHANGE` → major. Any other type (`chore:`, `docs:`, …) produces **no release** — this is why Dependabot's `chore(deps):` merges never bump the version.
 - **What it does on a release-worthy push:** writes `CHANGELOG.md`, bumps the version in `package.json` (via `@semantic-release/npm` with `npmPublish: false`, so **no** `npm publish` happens here), commits `chore(release): vX.Y.Z [skip ci]`, and pushes the `vX.Y.Z` tag.
 - **`[skip ci]`** in the commit subject stops the workflow from re-running on its own release commit (no loop); the `v*` tag then hands off to `release.yml`.
 - **Auth:** the built-in `GITHUB_TOKEN` with `contents: write` — sufficient to push the commit + tag while `master` has **no branch protection**. If `master` is branch-protected, switch to a GitHub App token (a PAT is not recommended).
@@ -218,12 +218,11 @@ Install is always `bun install --frozen-lockfile` from the committed `bun.lock`.
 - **`release` job:** validates tag ≡ `package.json` version, builds, `bun pm pack` (honors the `files` field), and publishes a GitHub Release with the tarball + `SHA256SUMS.txt` and generated release notes. Prerelease versions are tagged as prereleases.
 - **`publish` job:** `npm publish` to the `@deepseek-ai` scope. Runs **only if the `NPM_TOKEN` repo secret is set** (the scope belongs to the DeepSeek org); without it the workflow still produces the GitHub Release, which is sufficient for the pinned-release install flow.
 
-### `renovate.yml` — dependency updates (self-hosted in Actions)
+### `dependabot.yml` — dependency updates (GitHub-native Dependabot)
 
-- Runs the official [Renovate](https://docs.renovatebot.com/) CLI (`renovatebot/github-action@v46.2.6`, pinned to Renovate `44.69.12`) as a scheduled (`* * * * *`) + manually-dispatched workflow — no external app install.
-- Renovate's `bun` manager owns both `package.json` and `bun.lock` (a `bun.lock` with no npm lockfile present means the npm manager drops `package.json`), and regenerates the lockfile with `bun install --ignore-scripts`.
-- Every PR is committed/titled `chore(deps): …` (via `:semanticCommitTypeAll(chore)` in `renovate.json`), so merging it runs `semantic-release.yml` but produces **no release**.
-- **Token:** uses a classic PAT with `repo` scope stored as `RENOVATE_TOKEN` when set, otherwise falls back to the built-in `GITHUB_TOKEN` (which requires the repo setting *Settings → General → Workflow → "Allow GitHub Actions to create and approve pull requests"* to be enabled).
+- The [`bun`](https://docs.github.com/en/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file#package-ecosystem-) ecosystem (`package-ecosystem: "bun"`, bun ≥ 1.1.39) owns both `package.json` and the committed `bun.lock`, checked weekly — no self-hosted updater, no extra token, and its lockfile updates stay in sync with CI's `bun install --frozen-lockfile`.
+- `commit-message.prefix` is pinned to `chore(deps)`: Dependabot's defaults are `build(deps)` (version updates) and `fix(deps)` (security updates), and a merged `fix(deps):` commit **would** bump a patch release. With the pinned prefix, merging a dependency PR runs `semantic-release.yml` but produces **no release** — the same invariant the repo had under Renovate.
+- Security updates still arrive (Dependabot's security PRs are not subject to the open-PR limit), just with the same release-safe prefix.
 
 ## Layout
 
@@ -257,9 +256,8 @@ scripts/smoke.mjs                offline functional smoke test for the built bun
 .github/workflows/ci.yml             CI: actionlint + typecheck + test (bun matrix) + build + smoke (node/bun matrix)
 .github/workflows/semantic-release.yml  CD stage 1: conventional commits -> bump package.json -> CHANGELOG.md -> v* tag
 .github/workflows/release.yml         CD stage 2: tag -> validate -> build -> GitHub Release (+ optional npm publish with NPM_TOKEN)
-.github/workflows/renovate.yml        dependency updates (self-hosted Renovate in Actions)
+.github/dependabot.yml                  dependency updates (bun ecosystem, chore(deps) prefix)
 .releaserc.json                       semantic-release config (conventionalcommits preset, npmPublish:false, v* tagFormat)
-renovate.json                         Renovate config (bun manager, chore(deps) commits)
 CHANGELOG.md                          generated by @semantic-release/changelog
 bun.lock                              committed lockfile (CI installs with --frozen-lockfile)
 cordis.patch.yml                 bundled dsh.bundle.patch layer — auto-applied by `dsh plugin add` (see "Install & mount")
