@@ -1,33 +1,40 @@
-# Example integration for @deepseek-ai/dsh-web-search-local.
+# Bundle patch for @deepseek-ai/dsh-web-search-local — applied automatically.
 #
-# Apply as a `--patch` overlay or drop these rows into a profile cordis.patch.yml.
-# The package is not published. Install it from a checkout first (README
-# "Install & mount"): `bun run build`, then either `dsh plugin --profile web add .`
-# (pnpm local dep, keeps the `name:` package name below) or point `name:` at the
-# built entry `file:///<checkout>/lib/index.js`.
+# This file is declared in package.json under `dsh.bundle.patch`, so
+# `dsh plugin --profile <name> add <this package>` registers the package in
+# the profile's `dsh.profile.bundles` and its rows mount on every boot.
+# There is no manual step: nothing to copy into a profile's cordis.patch.yml.
 #
-# IMPORTANT: a patch REPLACES the targeted row's whole `config` (it does not merge),
-# so the `web` row restates BOTH searchProvider and fetchProvider. The stock
-# `web-search-deepseek` / `web-fetch-http` rows may stay: once `web` is pinned they
-# are registered-but-unselected (deepseek's provider is permanently "available", so
-# pinning is required to avoid WEB_PROVIDER_AMBIGUOUS).
+# Layer order: the stock base/surface bundle layers, then this layer, then the
+# profile's cordis.patch.yml (user layer), then $DSH_HOME/cordis.patch.yml,
+# then --patch overlays. Later layers win, so personal overrides belong in
+# the user layer — this file is the stock base and stays untouched.
+#
+# IMPORTANT: a patch REPLACES the targeted row's whole `config` (it does not
+# merge), so the `web` row restates BOTH searchProvider and fetchProvider.
+# The stock `web-search-deepseek` / `web-fetch-http` rows from dsh-base may
+# stay: once `web` is pinned they are registered-but-unselected (deepseek's
+# provider is permanently "available", so pinning is required to avoid
+# WEB_PROVIDER_AMBIGUOUS).
 #
 # Pin `searchProvider: web` => the harness's `web_search` tool queries the
-# internet via the plugin's built-in in-process metasearch (SearXNG-style:
-# parallel keyless fan-out to DuckDuckGo/Bing/Wikipedia + merge/dedup/rank,
-# no external instance, no API key, no setup). `engine: duckduckgo` for DDG only.
-# `fetchProvider: local` => `web_fetch` retrieves the http(s) sources the search
-# returns (the local fetch provider wraps http/https) and still reads `file://`.
-# For on-disk corpus search instead, pin `searchProvider: local`.
+# internet via the plugin's built-in in-process metasearch (keyless fan-out
+# to DuckDuckGo/Bing/Wikipedia + merge/dedup/rank, no external instance, no
+# API key, no setup). `fetchProvider: local` => `web_fetch` retrieves the
+# http(s) sources the search returns and still reads `file://`. For on-disk
+# corpus search instead, override `searchProvider: local` in the user layer.
 - insert:
     - id: web-search-local
       name: '@deepseek-ai/dsh-web-search-local'
       config:
-        # Optional on-disk corpus (used only by the `local` search provider).
-        # Leave empty to rely purely on web search.
-        corpusDirs: [!!js process.cwd()]
-        # Web backend: auto | duckduckgo | searxng. The default is auto, and searxng is the built-in metasearch.
+        # Web backend: auto | duckduckgo | searxng (searxng = built-in metasearch).
+        # Defaults to auto; override in the user layer to change.
         # engine: auto
+        # Optional on-disk corpus (used only by the `local` search provider).
+        # Left empty on purpose: this layer is applied automatically, so it
+        # must not start indexing the boot directory. Set it in the user layer:
+        # corpusDirs:
+        #   - D:\docs
 - id: web
   config:
     searchProvider: web

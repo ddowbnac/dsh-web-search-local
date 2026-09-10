@@ -79,15 +79,19 @@ The package is not on the npm registry, so you install it from a checkout. Both 
 bun run build
 ```
 
-### Option A: profile dependency (recommended)
+### Option A: profile dependency (recommended — one command)
 
-From the plugin's checkout directory, link it into a DSH profile:
+From the plugin's checkout directory:
 
 ```powershell
 dsh plugin --profile web add .
 ```
 
-`dsh plugin` forwards to `pnpm add` inside the profile directory (pnpm must be on PATH). A local directory becomes a pnpm local dependency, so the profile resolves the package name `@deepseek-ai/dsh-web-search-local` to this checkout. An explicit path works too (`dsh plugin --profile web add <path>/dhs-web-search-local`, `file:`/`link:` forms included). Remove it with `dsh plugin --profile web remove @deepseek-ai/dsh-web-search-local`.
+That is the whole install. `dsh plugin` initializes the profile on first use and forwards to `pnpm add` inside the profile directory (pnpm must be on PATH). A local directory becomes a pnpm local dependency, so the profile resolves the package name `@deepseek-ai/dsh-web-search-local` to this checkout. An explicit path works too (`dsh plugin --profile web add <path>/dhs-web-search-local`, `file:`/`link:` forms included).
+
+Because the package declares `dsh.bundle.patch` (its shipped `cordis.patch.yml`), `dsh plugin` registers it in the profile's `dsh.profile.bundles` as part of the same command — the integration rows (the `web-search-local` plugin row and the `web` provider pin) mount automatically on every boot. There is no manual `cordis.patch.yml` step.
+
+Remove it with `dsh plugin --profile web remove @deepseek-ai/dsh-web-search-local`: the same reconciliation drops the bundle layer, so the mount goes away with the dependency.
 
 The dependency is a local link, so the profile always loads the current checkout. After editing sources, re-run `bun run build` for the change to take effect.
 
@@ -96,19 +100,25 @@ The dependency is a local link, so the profile always loads the current checkout
 Skip the pnpm dependency entirely and point the row's `name` at the built entry point (after `bun run build`):
 
 ```yaml
-name: '<path>/dhs-web-search-local/lib/index.js'
+name: 'file:///<path>/dhs-web-search-local/lib/index.js'
 ```
 
-Plugin entries are dynamically imported, so `name` is any ESM specifier: the package name (option A) or an absolute `file://` URL. A bare absolute Windows path is not a valid ESM URL. Use the `file:///` form with forward slashes.
+Plugin entries are dynamically imported, so `name` is any ESM specifier: the package name (option A) or an absolute `file://` URL. A bare absolute Windows path is not a valid ESM URL. Use the `file:///` form with forward slashes. With no profile dependency, there is nothing for `dsh plugin` to reconcile, so option B keeps the manual mount below.
 
 ### Mounting the integration
 
-Either way, add the integration rows: apply `./cordis.patch.yml` as a `--patch` overlay, or merge them into the profile's `cordis.patch.yml` at `$DSH_HOME/profiles/web/cordis.patch.yml` (default home `~/.dsh`). A patch replaces the `web` row's whole `config`, so the snippet restates both `searchProvider` and `fetchProvider`:
+Option A needs no manual mount. The layer order is: the stock base/surface bundle layers, the package bundle layers in `dsh.profile.bundles` order (this plugin's is last among them), the profile's `cordis.patch.yml` (user layer), `$DSH_HOME/cordis.patch.yml`, and any `--patch` overlays — later layers win. So the shipped patch is a stock base the user layer overrides freely: set `corpusDirs`, switch `engine`, pin a different provider, … Inspect the composed tree any time with:
+
+```powershell
+dsh --profile web --dump-config
+```
+
+For option B (manual mount), apply `./cordis.patch.yml` as a `--patch` overlay, or merge its rows into the profile's `cordis.patch.yml` at `$DSH_HOME/profiles/web/cordis.patch.yml` (default home `~/.dsh`), adapting the row's `name` to the `file://` entry. A patch replaces the `web` row's whole `config`, so the snippet restates both `searchProvider` and `fetchProvider`:
 
 ```yaml
 - insert:
     - id: web-search-local
-      name: '@deepseek-ai/dsh-web-search-local'   # or the file:// URL (option B)
+      name: 'file:///<path>/dhs-web-search-local/lib/index.js'   # option B entry
       config:
         corpusDirs: [!!js process.cwd()]   # optional. Only used by the `local` provider
         # engine: auto                     # auto | duckduckgo | searxng (searxng = built-in metasearch)
@@ -118,7 +128,7 @@ Either way, add the integration rows: apply `./cordis.patch.yml` as a `--patch` 
     fetchProvider: local
 ```
 
-> **Pinning is mandatory.** The stock `deepseek-official` provider is always "available", so without pinning `searchProvider` the seam would report `WEB_PROVIDER_AMBIGUOUS`. The stock `web-search-deepseek` / `web-fetch-http` rows may stay (registered but unselected).
+> **Pinning is mandatory.** The stock `deepseek-official` provider is always "available", so without pinning `searchProvider` the seam would report `WEB_PROVIDER_AMBIGUOUS`. The stock `web-search-deepseek` / `web-fetch-http` rows may stay (registered but unselected). The shipped bundle patch does the pinning; it deliberately sets no `corpusDirs` (an auto-applied layer must not index the boot directory by default — set it in the user layer or via the settings section).
 
 ## Configuration
 
@@ -252,7 +262,7 @@ scripts/smoke.mjs                offline functional smoke test for the built bun
 renovate.json                         Renovate config (bun manager, chore(deps) commits)
 CHANGELOG.md                          generated by @semantic-release/changelog
 bun.lock                              committed lockfile (CI installs with --frozen-lockfile)
-cordis.patch.yml                 example integration
+cordis.patch.yml                 bundled dsh.bundle.patch layer — auto-applied by `dsh plugin add` (see "Install & mount")
 ```
 
 ## Known limitations
