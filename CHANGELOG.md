@@ -1,3 +1,10 @@
+## [1.1.3](https://github.com/ddowbnac/dsh-web-search-local/compare/v1.1.2...v1.1.3) (2026-09-12)
+
+
+### Bug Fixes
+
+* **deps:** refresh transitive dependencies to latest ([f4e0453](https://github.com/ddowbnac/dsh-web-search-local/commit/f4e045393ad477ecc795aa8dc7bf28dafc179f36))
+
 ## [1.1.2](https://github.com/ddowbnac/dsh-web-search-local/compare/v1.1.1...v1.1.2) (2026-09-10)
 
 
