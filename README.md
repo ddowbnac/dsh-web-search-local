@@ -1,134 +1,84 @@
 # @djdowbnac/dsh-web-search-local
 
-A web-search provider for the DeepSeek Harness (`ctx.web`). It lets `web_search` query the real internet without a DeepSeek/Exa/Perplexity account or an API key, and it adds an optional fully local full-text index over your own files.
+A web-search provider for the DeepSeek Harness without an account or API key, plus an optional fully local full-text index over your own files.
 
 The plugin registers two search providers and one fetch provider on the `ctx.web` seam:
 
-| Provider id | What it does | Network |
+| Provider | What it does | Network |
 |---|---|---|
-| `web` | Real internet search, via the built-in metasearch (engines `auto`/`searxng`) or DuckDuckGo only (`duckduckgo`). | yes (outbound HTTPS to the upstream engines) |
-| `local` | Full-text search over a local corpus (BM25 ranking, snippets, incremental re-index, `bun:sqlite` FTS5 on Bun, pure-JS JSON index on Node). | none |
-| `local` (fetch) | Reads `file://` URLs from disk and retrieves `http(s)://` URLs, so the sources `web_search` returns are usable by `web_fetch`. | on fetch only |
+| `web` | Internet search via the built-in metasearch (`auto`, `searxng`) or DuckDuckGo only (`duckduckgo`). | outbound HTTPS to the upstreams |
+| `local` | Full-text search over a local corpus (BM25, snippets, incremental re-index, `bun:sqlite` FTS5 on Bun, pure-JS JSON on Node). | none |
+| `local` (fetch) | Reads `file://` URLs from disk and retrieves the `http(s)://` URLs `web_search` returns. | on fetch only |
 
-Pin the `web` provider when you want internet search without a keyed external API. The stock `web-search-deepseek` plugin requires a DeepSeek account and API key.
+Pin `web` when you want internet search without a keyed external API. The stock `web-search-deepseek` plugin requires a DeepSeek account and API key.
 
----
+## Internet search (`web`)
 
-## Internet search (the `web` provider)
+The `engine` field selects the backend (UI or YAML):
 
-The `engine` setting selects the backend (UI or YAML):
+- `auto` (default): the built-in metasearch. Fans out to DuckDuckGo, Bing, and Wikipedia in parallel, then merges, dedups, and ranks the hits. No instance, no URL, no setup.
+- `duckduckgo`: DuckDuckGo only, the keyless public endpoint `html.duckduckgo.com/html/`. Filters out the ad rows (`duckduckgo.com/y.js`).
+- `searxng`: the same built-in metasearch. The value name is kept for compatibility with the 0.1.x instance model.
 
-- **`auto`** (default): the built-in in-process metasearch. It fans out to DuckDuckGo, Bing, and Wikipedia in parallel, then merges, dedups, and ranks the combined hits. DuckDuckGo is one of the three upstream engines, not a fallback tier. There is no instance, no URL, and no setup.
-- **`duckduckgo`**: the DuckDuckGo upstream only, the keyless public HTML endpoint (`html.duckduckgo.com/html/`). Ad-injected rows (`duckduckgo.com/y.js`) are filtered out.
-- **`searxng`**: the same built-in metasearch. We kept the value name for settings compatibility with the 0.1.x instance model. There is no instance and no URL to point at.
+## Install and mount
 
-### Built-in metasearch
+The package is published on npm, so a normal install pulls the registry version:
 
-The `auto` and `searxng` backends run a simplified port of SearXNG inside the plugin process (TypeScript, `src/web/metasearch/`). The only runtime requirement is outbound HTTPS `fetch` from the harness process. There is no Python, no venv, no instance to install, no port to bind, and no API key.
-
-- Fan-out: each query runs all three upstream engines concurrently (registration order fixed: DuckDuckGo first). Each engine is a small adapter, `{ id, displayName, timeoutMs, weight, search() }`, with a pure parser and typed soft-failures (`EngineError` kinds: `http`, `network`, `parse`, `challenge`).
-- Per-engine budget: 10 s per engine inside a 20 s per-request budget for the whole search. Both compose with the caller's `AbortSignal` (composable `AbortSignal`s, no timer leaks). A slow or hung engine is dropped and recorded, and the remaining engines still answer within the budget.
-- Merge, dedup, rank: every rule ports a SearXNG rule, and the port is traceable. URL normalization yields a dedup identity (host case-insensitive, scheme ignored, trailing slash, tracking params, and fragment stripped), a port of SearXNG's `MainResult.__hash__` (the per-rule divergences are listed under [How it works](#how-it-works)). Duplicates across engines merge into one hit (the longest title and snippet win, an `https://` URL is preferred for display, and the engine-to-rank map is unioned). The score is the sum of engine-weight/rank (port of `calculate_score`). The final order is the historical round-robin balancer: one slot per engine per rank tier, score-descending within a tier, capped at `maxResults` with snippets clipped to `snippetLength`.
-- Engine set: DuckDuckGo is the one non-optional engine, the guaranteed keyless upstream. Bing and Wikipedia are registered `optional`, so a failed optional engine cannot kill an otherwise healthy search.
-- Failure semantics: if every non-optional upstream fails (network error, HTTP >= 400, parse failure, or challenge page), the search throws `WEB_PROVIDER_ERROR` with per-engine detail. "The web has no results" and "every upstream is broken" must not look alike to the caller. On partial failure the healthy engines' merged results are returned, and the per-engine health is exposed on the `__wslMetasearch` diagnostics side-channel (`status` `ok`/`failed`/`skipped`, hit count, duration, error text).
-- Informed empty: zero hits from healthy engines return an empty result whose content names which engines answered and which failed, so the caller can tell "no results" apart from "upstreams struggling".
-- Agent sandbox: the web path spawns nothing, binds no port, and writes no files. Only outbound HTTPS is needed, so the metasearch works inside DSH agent sandboxes that forbid children and fixed ports.
-- Dates: Wikipedia hits carry `publishedAt` (the API's `timestamp`). DuckDuckGo and Bing do not expose a reliable publication date.
-
----
-
-## Runtime matrix
-
-The `dsh` harness runs on Node.js. The local corpus engine therefore has two backends and picks one at runtime with a guarded dynamic import:
-
-| Runtime | Backend | Index file | Notes |
-|---|---|---|---|
-| **Node.js** (default harness) | Pure-JS inverted index, hand-rolled BM25 | `index.fallback.json` | Zero dependencies. Works on Node 18+ and Bun. |
-| **Bun** | `bun:sqlite` FTS5 (guarded `import("bun:sqlite")`, only when the `Bun` global exists) | `index.db` (WAL) | Native `bm25()` + `snippet()`. Faster on large corpora. |
-
-Both backends are fully local, and the provider's public behavior is identical: same `WebSearchResult` shape, `file://` sources, BM25-style ranking, snippets, and an informed empty on a 0-document corpus. On Node the FTS5 module is never imported, so there is no `bun:sqlite` link error. The web backends use only global `fetch` (Node >= 18 or Bun) plus `node:` builtins, so they work on either runtime.
-
----
-
-## How it works
-
-- Web provider (`src/web/`):
-  - `metasearch/orchestrator.ts`: the fan-out. SearXNG's per-engine threads become a `Promise.allSettled` of self-catching tasks, with composable AbortSignals (caller signal + global deadline + per-engine timeout), partial-failure diagnostics, and all-non-optional-failed -> `MetasearchError`.
-  - `metasearch/types.ts`: the `SearchEngine` adapter contract (`id`, `displayName`, `timeoutMs`, `weight`, `optional?`, `search()`), `EngineDiagnostic`, `MetasearchError`, and `EngineError` (typed soft-failures: `http`/`network`/`parse`/`challenge`).
-  - `metasearch/merge.ts`: pure merge/dedup/score/interleave, a port of SearXNG's `merge_two_main_results` + `calculate_score` + the historical round-robin balancer. No I/O, unit-tested.
-  - `metasearch/url.ts`: URL normalization + dedup identity (port of SearXNG's `MainResult.__hash__`). Divergences from SearXNG: host lowercased, trailing slash stripped, tracking params + param order canonicalized, fragment excluded.
-  - `metasearch/http.ts`: shared upstream fetch helper: consistent Chrome UA, HTTP/network/oversize failures as typed `EngineError`s, 1.5 MB per-response body budget.
-  - `metasearch/engines/duckduckgo.ts`: DuckDuckGo upstream, an adapter around the existing keyless scraper. A DDG challenge/anomaly page is a typed `challenge` failure, not "zero results".
-  - `metasearch/engines/bing.ts`: Bing upstream, a keyless HTML SERP scraper ported from SearXNG's `searx/engines/bing.py` (`b_results`/`b_algo` rows, `b_caption` snippets, and the `/ck/a?u=a1<base64url>` click-redirect decode).
-  - `metasearch/engines/wikipedia.ts`: Wikipedia upstream, the keyless MediaWiki action API (`list=search`, namespace 0). `searchmatch` markup is stripped, and the API `timestamp` becomes `publishedAt`.
-  - `metasearch/engines/index.ts`: the default engine set, `[duckduckgo, bing (optional), wikipedia (optional)]`.
-  - `duckduckgo.ts`: the keyless DDG HTML scraper, a pure unit-tested HTML parser (`result__a` title anchors + `result__snippet` paired by resolved URL), `uddg` redirect decoding, entity decoding, snippet clipping, and ad-row filtering. It is now also the DuckDuckGo upstream of the metasearch.
-  - `provider.ts`: the `web` search provider, with engine selection (`auto`/`duckduckgo`/`searxng`), a 20 s per-request budget composed with the caller's `AbortSignal`, informed-empty content on zero hits, `WEB_ABORTED` / `WEB_PROVIDER_ERROR` mapping, and `lastReport()` (exposed on the seam as `__wslMetasearch`).
-- Local corpus engine (`src/engine/`): walks the configured `corpusDirs` (async, bounded worker pool, symlink-safe, per-file skip on error, hard `maxFilesPerBuild` cap), extracts text per extension, and stores it in a single on-disk index (FTS5 on Bun, JSON BM25 on Node, incremental via `manifest.json`).
-- Providers (`src/provider.ts`, `src/fetch-provider.ts`): the `local` search provider returns `file://` sources (informed empty on a 0-document corpus). The `local` fetch provider reads `file://` from disk and wraps `http(s)://` retrieval.
-- Pre-warm + concurrency: the index builds in the background at plugin mount. All index mutation is serialized behind one async mutex, and a re-scan interval avoids re-walking the corpus on every search. The web provider needs no pre-warm because it spawns nothing.
-- Settings + UI: a `web-search-local` section registered through `installSection` (persisted to `$DSH_HOME/settings.yaml`, hot-reloaded) plus an optional browser card under Settings -> Plugins (the platform idiom: the card consumes the `useLocalSearchCard` selector hook and `save`/`discard`/`edit`/`resetField` actions injected by the slot renderer). The card edits engine, corpus dirs, max results, snippet length, index dir, and auto-reindex. It mirrors the platform plugin-card chrome (the stock Shell / Agent loop / Subagent / Web search cards): the same card/header/chevron/footer/field styles on the same design tokens, staged edits with per-field "Overridden" badges and reset-to-default, and a save that writes only on confirm and collapses the card once the write lands.
-
----
-
-## Install & mount (local, not yet published)
-
-The package is not on the npm registry, so you install it from a checkout. Both options below consume the build artifact, so start with:
-
-```powershell
-bun run build
+```bash
+dsh plugin --profile web add @djdowbnac/dsh-web-search-local
 ```
 
-### Option A: profile dependency (recommended — one command)
+That is the whole install. `dsh plugin` initializes the profile on first use and forwards to `pnpm add` inside the profile directory (pnpm must be on PATH). To pin an exact version, add the full specifier (`dsh plugin --profile web add @djdowbnac/dsh-web-search-local@1.1.2`).
 
-From the plugin's checkout directory:
+Remove it with:
 
-```powershell
+```bash
+dsh plugin --profile web remove @djdowbnac/dsh-web-search-local
+```
+
+### From a checkout (development)
+
+To work on the plugin itself, point the same command at the checkout instead of the package name:
+
+```bash
+# from the plugin's checkout directory
 dsh plugin --profile web add .
 ```
 
-That is the whole install. `dsh plugin` initializes the profile on first use and forwards to `pnpm add` inside the profile directory (pnpm must be on PATH). A local directory becomes a pnpm local dependency, so the profile resolves the package name `@djdowbnac/dsh-web-search-local` to this checkout. An explicit path works too (`dsh plugin --profile web add <path>/dhs-web-search-local`, `file:`/`link:` forms included).
+The directory becomes a pnpm local dependency, so the profile resolves the package name to this checkout, and the bundle registration works the same way. The dependency is a local link, so the profile always loads the current checkout. After editing sources, re-run `bun run build` for the change to take effect.
 
-Because the package declares `dsh.bundle.patch` (its shipped `cordis.patch.yml`), `dsh plugin` registers it in the profile's `dsh.profile.bundles` as part of the same command — the integration rows (the `web-search-local` plugin row and the `web` provider pin) mount automatically on every boot. There is no manual `cordis.patch.yml` step.
+### Zero-install (advanced)
 
-Remove it with `dsh plugin --profile web remove @djdowbnac/dsh-web-search-local`: the same reconciliation drops the bundle layer, so the mount goes away with the dependency.
-
-The dependency is a local link, so the profile always loads the current checkout. After editing sources, re-run `bun run build` for the change to take effect.
-
-### Option B: zero-install (direct `file://` entry)
-
-Skip the pnpm dependency entirely and point the row's `name` at the built entry point (after `bun run build`):
+To skip the pnpm dependency entirely, point the row's `name` at a built entry point. From a checkout, that is `bun run build` first, then:
 
 ```yaml
 name: 'file:///<path>/dhs-web-search-local/lib/index.js'
 ```
 
-Plugin entries are dynamically imported, so `name` is any ESM specifier: the package name (option A) or an absolute `file://` URL. A bare absolute Windows path is not a valid ESM URL. Use the `file:///` form with forward slashes. With no profile dependency, there is nothing for `dsh plugin` to reconcile, so option B keeps the manual mount below.
-
 ### Mounting the integration
 
-Option A needs no manual mount. The layer order is: the stock base/surface bundle layers, the package bundle layers in `dsh.profile.bundles` order (this plugin's is last among them), the profile's `cordis.patch.yml` (user layer), `$DSH_HOME/cordis.patch.yml`, and any `--patch` overlays — later layers win. So the shipped patch is a stock base the user layer overrides freely: set `corpusDirs`, switch `engine`, pin a different provider, … Inspect the composed tree any time with:
+The dependency installs (npm or checkout) need no manual mount. The layer order is: the stock base/surface bundle layers, the package bundle layers in `dsh.profile.bundles` order (this plugin's is last among them), the profile's `cordis.patch.yml` (user layer), `$DSH_HOME/cordis.patch.yml`, and any `--patch` overlays: the later layer wins. So the shipped patch is a stock base the user layer overrides freely: set `corpusDirs`, switch `engine`, pin a different provider. Inspect the composed tree any time:
 
-```powershell
+```bash
 dsh --profile web --dump-config
 ```
 
-For option B (manual mount), apply `./cordis.patch.yml` as a `--patch` overlay, or merge its rows into the profile's `cordis.patch.yml` at `$DSH_HOME/profiles/web/cordis.patch.yml` (default home `~/.dsh`), adapting the row's `name` to the `file://` entry. A patch replaces the `web` row's whole `config`, so the snippet restates both `searchProvider` and `fetchProvider`:
+For the zero-install path (manual mount), apply `./cordis.patch.yml` as a `--patch` overlay, or merge its rows into the profile's `cordis.patch.yml` at `$DSH_HOME/profiles/web/cordis.patch.yml` (default home `~/.dsh`), adapting `name` to the `file://` entry. A patch replaces the target row's whole `config`, so the snippet restates `searchProvider` and `fetchProvider`:
 
 ```yaml
 - insert:
     - id: web-search-local
-      name: 'file:///<path>/dhs-web-search-local/lib/index.js'   # option B entry
+      name: 'file:///<path>/dhs-web-search-local/lib/index.js'   # zero-install entry
       config:
         corpusDirs: [!!js process.cwd()]   # optional. Only used by the `local` provider
-        # engine: auto                     # auto | duckduckgo | searxng (searxng = built-in metasearch)
+        # engine: auto                     # auto | duckduckgo | searxng
 - id: web
   config:
-    searchProvider: web      # <- internet search. Use `local` for on-disk corpus search instead.
+    searchProvider: web      # <- internet. Use `local` for on-disk corpus search.
     fetchProvider: local
 ```
 
-> **Pinning is mandatory.** The stock `deepseek-official` provider is always "available", so without pinning `searchProvider` the seam would report `WEB_PROVIDER_AMBIGUOUS`. The stock `web-search-deepseek` / `web-fetch-http` rows may stay (registered but unselected). The shipped bundle patch does the pinning; it deliberately sets no `corpusDirs` (an auto-applied layer must not index the boot directory by default — set it in the user layer or via the settings section).
+> **Pinning is mandatory.** The stock `deepseek-official` provider is always "available", so without pinning `searchProvider` the seam reports `WEB_PROVIDER_AMBIGUOUS`. The stock `web-search-deepseek` / `web-fetch-http` rows may stay (registered but unselected). The shipped bundle patch does the pinning and deliberately sets no `corpusDirs`: an auto-applied layer must not index the boot directory. Set it in the user layer or via the settings section.
 
 ## Configuration
 
@@ -136,11 +86,11 @@ The provider exposes the `web-search-local` settings section, persisted to `$DSH
 
 | Field | Default | Meaning |
 |---|---|---|
-| `engine` | `auto` | Web-search backend: `auto` (built-in metasearch: DuckDuckGo + Bing + Wikipedia), `duckduckgo` (DuckDuckGo only), or `searxng` (= built-in metasearch, kept for 0.1.x compatibility). |
-| `corpusDirs` | `[]` | Directories to index (absolute or `~`). Only used by the `local` search provider. An empty list returns an informed empty result. |
-| `include` | built-in text/code set | Extra extensions to index (with/without a leading dot). |
-| `exclude` | built-in (`node_modules`, `.git`, `*.min.js`, lockfiles, and more) | Extra dir names, file names, or dot-suffixes to skip. |
-| `indexDir` | `<DSH home>/web-search-local` | Where the index files (`index.db` or `index.fallback.json`) and `manifest.json` live. |
+| `engine` | `auto` | Web backend: `auto` (metasearch: DuckDuckGo + Bing + Wikipedia), `duckduckgo`, or `searxng` (= metasearch, kept for 0.1.x compatibility). |
+| `corpusDirs` | `[]` | Directories to index (absolute or `~`). Only used by the `local` search provider. Empty returns an informed empty result. |
+| `include` | built-in text/code set | Extra extensions to index (with or without a leading dot). |
+| `exclude` | built-in (`node_modules`, `.git`, `*.min.js`, lockfiles, more) | Extra dir names, file names, or dot-suffixes to skip. |
+| `indexDir` | `<DSH home>/web-search-local` | Where `index.db` or `index.fallback.json` and `manifest.json` live. |
 | `maxResults` | `20` | Per-query source cap (the seam re-enforces the tool's bound). |
 | `snippetLength` | `160` | Approximate snippet length. |
 | `autoReindex` | `true` | Re-scan the corpus on each search (bounded by an internal interval). `false` = build on change only. |
@@ -156,118 +106,10 @@ Two ways to configure:
        - D:\docs
        - ~/notes
    ```
-2. **UI card:** when the deployment renders third-party plugin cards, a card appears under Settings -> Plugins -> Plugin configuration for `web-search-local` (edit engine, corpus dirs, max results, snippet length, index dir, auto-reindex, then Save). The card is optional. If a deployment does not render plugin cards, the YAML path remains fully functional.
-
-**Migration from 0.1.x:** the 0.1.x settings `searxngUrl` and `manageSearxng` were removed from the schema. If they are still in your `settings.yaml` (or in a `cordis.yml` base layer), the plugin ignores them: it passes them through inert, without validation, and it never errors on them. You can delete them, and the plugin does not rewrite or prune them. `engine: searxng` keeps working: the value now means the built-in metasearch.
-
-## Build & test
-
-```
-bun run build           # bun build src/index.ts --target node --format esm --outdir lib, then strip the comments bun injects into the bundle
-bun test                # 153 tests (metasearch core + per-engine parsers + provider, local engine/drivers, plugin shape, client bundle)
-bunx tsc --noEmit       # strict typecheck (the sources are type-clean; CI enforces this)
-node scripts/smoke.mjs  # offline functional smoke test of the built bundle (also: bun scripts/smoke.mjs)
-```
-
-Notes:
-
-- The build targets Node (the harness runtime). The single `bun:sqlite` reference is a guarded dynamic import, so the bundle links and runs under Node. It is only evaluated when the `Bun` global exists.
-- The build deliberately inlines the peer packages (`@deepseek-ai/*`) and `schemastery`. `schemastery` is not a declared peer, so a bare import would not resolve under a strict pnpm profile layout. The inlined `WebError` is safe because the harness classifies errors by their `.code` property, not cross-package `instanceof`.
-- We hand-emit `lib/client.js` (the browser half) in the `window.__ModuleLoader__.load` lazy-CJS format and ship it as-is.
-
-## CI/CD
-
-GitHub Actions, three workflows in `.github/workflows/` (plus GitHub-native Dependabot for dependency updates):
-
-```
-push to master (conventional commits)
-   └─> semantic-release.yml     analyze -> bump package.json -> CHANGELOG.md
-                                 -> commit "chore(release): vX [skip ci]" -> push v* tag
-               └─> release.yml  validate tag≡version -> build -> pack
-                                 -> GitHub Release (+ optional npm publish)
-
-dependabot (independent)         opens "chore(deps):" PRs (bun ecosystem, never trigger a release)
-```
-
-The release pipeline is split into two stages on purpose: **`semantic-release.yml`** owns *versioning + tagging* (from conventional commits) and **`release.yml`** owns *packaging + publishing*. They hand off through the `v*` tag, and the `tag ≡ package.json version` check in `release.yml` still holds because semantic-release bumps `package.json` **before** it pushes the tag.
-
-### `ci.yml` — runs on every push/PR to `master`
-
-| Job | What it does |
-|---|---|
-| `lint-workflows` | Lints the workflow YAMLs with `actionlint`. |
-| `typecheck` | `bunx tsc --noEmit` under the strict tsconfig. |
-| `test` | `bun test` (153 offline tests) on a Bun `1.3` / `1.4` matrix. |
-| `build` | `bun run build` and uploads the resulting `lib/` as an artifact. |
-| `smoke` | `scripts/smoke.mjs` against the built bundle on a Node `20.x` / `22.x` / Bun `1.4` matrix — verifies the runtime matrix end-to-end offline (Node → JSON BM25 backend, Bun → `bun:sqlite` FTS5): exports, provider registration, a real local-corpus search over a temp corpus, and a `file://` fetch. No network, no `node_modules` (the bundle is dependency-free). |
-
-Install is always `bun install --frozen-lockfile` from the committed `bun.lock`. The build-time `@deepseek-ai/*` packages (seam types, schemastery) are `devDependencies`; the published bundle inlines them, so consumers see zero runtime dependencies.
-
-### `semantic-release.yml` — stage 1: versioning + tagging from conventional commits
-
-- **Trigger:** every `push` to `master`. Release type comes from the [conventional-commits](https://www.conventionalcommits.org/) preset: `feat:` → minor, `fix:`/`perf:` → patch, `BREAKING CHANGE` → major. Any other type (`chore:`, `docs:`, …) produces **no release** — this is why Dependabot's `chore(deps):` merges never bump the version.
-- **What it does on a release-worthy push:** writes `CHANGELOG.md`, bumps the version in `package.json` (via `@semantic-release/npm` with `npmPublish: false`, so **no** `npm publish` happens here), commits `chore(release): vX.Y.Z [skip ci]`, and pushes the `vX.Y.Z` tag.
-- **`[skip ci]`** in the commit subject stops the workflow from re-running on its own release commit (no loop); the `v*` tag then hands off to `release.yml`.
-- **Auth:** the built-in `GITHUB_TOKEN` with `contents: write` — sufficient to push the commit + tag while `master` has **no branch protection**. If `master` is branch-protected, switch to a GitHub App token (a PAT is not recommended).
-- **Concurrency:** `group: release-<ref>` with `cancel-in-progress: false` so two back-to-back merges queue instead of racing the version bump / tag push.
-- **Baseline:** `master` already carries the `v0.2.0` tag, so semantic-release treats it as the last release and the next one bumps from `0.2.0` (`feat:` → `0.3.0`, `fix:`/`perf:` → `0.2.1`, breaking → `1.0.0`). A *tag-less* repo would jump straight to `1.0.0` (semantic-release's `FIRST_RELEASE`), so the baseline tag matters.
-
-### `release.yml` — stage 2: tag-driven packaging + optional npm publish
-
-- **Trigger:** semver tag push (`v0.2.0`) — now normally the tag that `semantic-release.yml` just pushed — or `workflow_dispatch` (optional `tag` input; defaults to the `package.json` version, creating and pushing the missing tag).
-- **`release` job:** validates tag ≡ `package.json` version, builds, `bun pm pack` (honors the `files` field), and publishes a GitHub Release with the tarball + `SHA256SUMS.txt` and generated release notes. Prerelease versions are tagged as prereleases.
-- **`publish` job:** `npm publish` to the `@deepseek-ai` scope. Runs **only if the `NPM_TOKEN` repo secret is set** (the scope belongs to the DeepSeek org); without it the workflow still produces the GitHub Release, which is sufficient for the pinned-release install flow.
-
-### `dependabot.yml` — dependency updates (GitHub-native Dependabot)
-
-- The [`bun`](https://docs.github.com/en/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file#package-ecosystem-) ecosystem (`package-ecosystem: "bun"`, bun ≥ 1.1.39) owns both `package.json` and the committed `bun.lock`, checked weekly — no self-hosted updater, no extra token, and its lockfile updates stay in sync with CI's `bun install --frozen-lockfile`.
-- `commit-message.prefix` is pinned to `chore(deps)`: Dependabot's defaults are `build(deps)` (version updates) and `fix(deps)` (security updates), and a merged `fix(deps):` commit **would** bump a patch release. With the pinned prefix, merging a dependency PR runs `semantic-release.yml` but produces **no release** — the same invariant the repo had under Renovate.
-- Security updates still arrive (Dependabot's security PRs are not subject to the open-PR limit), just with the same release-safe prefix.
-
-## Layout
-
-```
-src/index.ts                     plugin entry: name, inject, Config, apply (registers local + web providers)
-src/provider.ts                  LocalSearchProvider (id "local"): corpus full-text search
-src/fetch-provider.ts            LocalFetchProvider (id "local"): file:// + http(s):// retrieval
-src/types.ts                     shared local-engine contract: EngineOptions, DocRow, Hit, IndexStats, SearchDriver
-src/web/provider.ts              WebSearchProvider (id "web"): engine selection, timeouts, failure mapping, lastReport
-src/web/duckduckgo.ts            keyless DDG HTML scraper + pure parser (now also the DDG metasearch upstream)
-src/web/metasearch/orchestrator.ts  parallel fan-out, budgets (composable AbortSignals), diagnostics
-src/web/metasearch/types.ts      SearchEngine contract, EngineDiagnostic, MetasearchError, EngineError
-src/web/metasearch/merge.ts      pure merge/dedup/score/interleave (SearXNG port)
-src/web/metasearch/url.ts        URL normalization + dedup identity (SearXNG __hash__ port)
-src/web/metasearch/http.ts       shared upstream fetch helper (UA, typed failures, body budget)
-src/web/metasearch/engines/duckduckgo.ts   DDG upstream adapter (challenge detection)
-src/web/metasearch/engines/bing.ts         Bing HTML scraper (b_results/b_algo, /ck/a decode)
-src/web/metasearch/engines/wikipedia.ts    Wikipedia MediaWiki action API (publishedAt)
-src/web/metasearch/engines/index.ts        default engine set [duckduckgo, bing*, wikipedia*] (*optional)
-src/engine/engine.ts             local corpus orchestrator: mutex, manifest, prewarm, backend pick
-src/engine/fts5.ts               bun:sqlite FTS5 driver (+ guarded loadSqlite/fts5Available)
-src/engine/fallback.ts           pure-JS inverted index in JSON (BM25): the Node backend
-src/engine/walk.ts               async corpus walk
-src/engine/extract.ts            per-extension text extraction
-src/engine/terms.ts              shared tokenizer
-lib/client.js                    browser UI card (settings.plugin.item)
-lib/types/*.d.ts                 hand-emitted type surface (entry + client)
-scripts/strip-bundle-comments.mjs  post-build step: strips the comments bun build injects into lib/index.js
-test/fixtures/metasearch/        live-captured upstream fixtures (duckduckgo.html, bing.html, wikipedia.json, startpage.html)
-scripts/smoke.mjs                offline functional smoke test for the built bundle (CI runtime matrix; node or bun)
-.github/workflows/ci.yml             CI: actionlint + typecheck + test (bun matrix) + build + smoke (node/bun matrix)
-.github/workflows/semantic-release.yml  CD stage 1: conventional commits -> bump package.json -> CHANGELOG.md -> v* tag
-.github/workflows/release.yml         CD stage 2: tag -> validate -> build -> GitHub Release (+ optional npm publish with NPM_TOKEN)
-.github/dependabot.yml                  dependency updates (bun ecosystem, chore(deps) prefix)
-.releaserc.json                       semantic-release config (conventionalcommits preset, npmPublish:false, v* tagFormat)
-CHANGELOG.md                          generated by @semantic-release/changelog
-bun.lock                              committed lockfile (CI installs with --frozen-lockfile)
-cordis.patch.yml                 bundled dsh.bundle.patch layer — auto-applied by `dsh plugin add` (see "Install & mount")
-```
+2. **UI card:** when the deployment renders third-party plugin cards, a card appears under Settings -> Plugins for `web-search-local` (engine, corpus dirs, max results, snippet length, index dir, auto-reindex, then Save). It is optional: when the deployment does not render cards, the YAML path remains fully functional.
 
 ## Known limitations
 
-- Web coverage: DuckDuckGo, Bing, and Wikipedia, all keyless. Google direct is not scraped because its CAPTCHAs are fragile. Rate limits and anti-bot walls depend on IP reputation (datacenter vs. residential). A walled engine just drops out, and the healthy engines' merged results are still served. The search throws `WEB_PROVIDER_ERROR` (with per-engine detail) only when every non-optional upstream fails.
-- DDG anomaly pages: under heavy abuse, DuckDuckGo can serve a challenge or anomaly page instead of results. The adapter records it as a typed `challenge` failure, the same as any other engine failure.
+- Web coverage: DuckDuckGo, Bing, and Wikipedia, all keyless. Google is not scraped directly because its CAPTCHAs are fragile. Rate limits and anti-bot walls depend on IP reputation (datacenter vs. residential). A walled upstream just drops out, and the healthy upstreams' merged results are still served. The search throws `WEB_PROVIDER_ERROR` (with per-upstream detail) only when every non-optional upstream fails.
+- DDG anomaly pages: under heavy abuse, DuckDuckGo can serve a challenge or anomaly page instead of results. The adapter records it as a typed `challenge` failure, the same as any other upstream failure.
 - `publishedAt`: Wikipedia hits carry it (the API `timestamp`). DuckDuckGo and Bing hits do not, because those upstreams expose no reliable date. Local corpus results use the file mtime.
-- Local corpus tokenizer: `unicode61` handles Latin and Cyrillic well. Dense CJK may need the `trigram` tokenizer (future work).
-- FTS5 only on Bun: on Node the (equally local) JSON index is used. It is slightly slower on very large corpora.
-- Two DSH processes sharing one `indexDir`: the Bun backend handles them via `busy_timeout` plus single-writer. A cross-process lockfile is a possible hardening.
