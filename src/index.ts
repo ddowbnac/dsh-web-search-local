@@ -36,23 +36,34 @@ const DEFAULT_EXCLUDE_FILES = new Set<string>([
 const DEFAULT_EXCLUDE_SUFFIXES: string[] = ['.min.js', '.min.css', '.map', '.tsbuildinfo', '.lockb'];
 
 export const Config = z.object({
-  corpusDirs: z.array(z.string()).default([]),
-  include: z.array(z.string()).default([]),
-  exclude: z.array(z.string()).default([]),
-  indexDir: z.string().default(''),
-  maxResults: z.number().step(1).min(1).default(20),
-  snippetLength: z.number().step(1).min(20).default(160),
+  corpusDirs: z.array(z.string()).default([]).volatile(),
+  include: z.array(z.string()).default([]).volatile(),
+  exclude: z.array(z.string()).default([]).volatile(),
+  indexDir: z.string().default('').volatile(),
+  maxResults: z.number().step(1).min(1).default(20).volatile(),
+  snippetLength: z.number().step(1).min(20).default(160).volatile(),
   engine: z
     .union([z.const('auto'), z.const('duckduckgo'), z.const('searxng')])
     .default('auto')
     .comment(
       'Web search backend: auto (built-in metasearch), duckduckgo, or searxng (= built-in metasearch, kept for compatibility).',
-    ),
-  autoReindex: z.boolean().default(true),
-  maxFileSizeBytes: z.number().step(1).min(0).default(5_000_000),
+    ).volatile(),
+  autoReindex: z.boolean().default(true).volatile(),
+  maxFileSizeBytes: z.number().step(1).min(0).default(5_000_000).volatile(),
 });
 
-/** Normalized config object (schema output type) as validated by `Config`. */
+/** Plain resolved shape - live ref values produced by `config.<field>.get()`. */
+type ResolvedConfig = {
+  corpusDirs: string[];
+  include: string[];
+  exclude: string[];
+  indexDir: string;
+  maxResults: number;
+  snippetLength: number;
+  engine: 'auto' | 'duckduckgo' | 'searxng';
+  autoReindex: boolean;
+  maxFileSizeBytes: number;
+};
 type ConfigValue = ReturnType<typeof Config>;
 
 function expandHome(p: string): string {
@@ -106,7 +117,7 @@ function parseExcludes(exclude: readonly string[]): {
   return { excludeDirs: dirs, excludeFiles: files, excludeSuffixes: suffixes };
 }
 
-function resolveOptions(ctx: unknown, config: ConfigValue): EngineOptions {
+function resolveOptions(ctx: unknown, config: ResolvedConfig): EngineOptions {
   const corpusDirs = (config.corpusDirs ?? []).map((d) => expandHome(d));
   const { excludeDirs, excludeFiles, excludeSuffixes } = parseExcludes(config.exclude ?? []);
   return {
@@ -124,7 +135,7 @@ function resolveOptions(ctx: unknown, config: ConfigValue): EngineOptions {
   };
 }
 
-function resolveWebOptions(config: ConfigValue): WebOptions {
+function resolveWebOptions(config: ResolvedConfig): WebOptions {
   return {
     engine: config.engine ?? 'auto',
     maxResults: config.maxResults ?? 20,
@@ -133,7 +144,7 @@ function resolveWebOptions(config: ConfigValue): WebOptions {
 }
 
 export function apply(ctx: {
-  inject: (deps: string[], cb: (c: { settings: { installSection: (...a: unknown[]) => void } }) => void) => void;
+  on: (event: string, handler: (paths: string[][]) => void) => void;
   web: {
     registerSearchProvider: (p: { id: string; available: () => boolean; search: unknown }) => void;
     registerFetchProvider: (p: { id: string; available: () => boolean; fetch: unknown }) => void;
@@ -141,9 +152,20 @@ export function apply(ctx: {
   effect?: (execute: () => (() => void | Promise<void>) | Promise<() => void | Promise<void>>, label?: string) => unknown;
   get?: (name: string) => unknown;
 }, config: ConfigValue): void {
-  let current = (): ConfigValue => config;
+  const current = (): ResolvedConfig => ({
+    corpusDirs: config.corpusDirs.get(),
+    include: config.include.get(),
+    exclude: config.exclude.get(),
+    indexDir: config.indexDir.get(),
+    maxResults: config.maxResults.get(),
+    snippetLength: config.snippetLength.get(),
+    engine: config.engine.get(),
+    autoReindex: config.autoReindex.get(),
+    maxFileSizeBytes: config.maxFileSizeBytes.get(),
+  } as ResolvedConfig);
   let engine: LocalEngine | undefined;
   let dirty = true;
+  ctx.on('loader/volatile-update', () => { dirty = true; });
 
   const engineNow = (): LocalEngine => {
     if (!engine || dirty) {
@@ -154,17 +176,6 @@ export function apply(ctx: {
     }
     return engine;
   };
-
-  ctx.inject(['settings'], (settingsCtx) => {
-    settingsCtx.settings.installSection(ctx, WEB_SEARCH_LOCAL_SETTINGS_NAMESPACE, Config, config, {
-      setSource: (source: () => ConfigValue) => {
-        current = source;
-      },
-      onChange: () => {
-        dirty = true;
-      },
-    });
-  });
 
   const webProvider = new WebSearchProvider(() => resolveWebOptions(current()));
   ctx.web.registerSearchProvider(new LocalSearchProvider(() => engineNow()));
