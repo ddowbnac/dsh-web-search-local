@@ -4,6 +4,10 @@
  *
  * - Works under Node >= 18 (JSON BM25 backend) and Bun (bun:sqlite FTS5).
  * - No network, no node_modules: only node: builtins + the inlined bundle.
+ * - Models the dsh 0.1.7 plugin contract: `apply(ctx, config)` receives live
+ *   volatile config refs (read via `.get()`, mutated in place through the
+ *   cosmokit volatile write symbol) and observes `loader/volatile-update`
+ *   instead of being re-run on settings changes.
  * - Exits 0 with a one-line summary on success; 1 with details on any failure.
  *
  * Usage: node scripts/smoke.mjs   (or: bun scripts/smoke.mjs)
@@ -23,6 +27,10 @@ function assert(cond, msg) {
 // Set before cleanup runs; process.exit() is called only after the finally
 // block, because process.exit() skips finally blocks entirely.
 let exitCode = 0;
+
+// The cosmokit volatile write symbol: the 0.1.7 host loader re-resolves
+// volatile config fields in place through `ref[SYMBOL](newValue)`.
+const VOLATILE_WRITE = Symbol.for('cosmokit.volatile.write');
 
 const libPath = fileURLToPath(new URL('../lib/index.js', import.meta.url));
 
@@ -47,14 +55,13 @@ try {
   writeFileSync(plainPath, plainContent);
   writeFileSync(fillerPath, fillerContent);
 
-  // ---- minimal mock ctx matching apply()'s expected shape ----------------
-  let installSectionCalls = 0;
+  // ---- minimal mock ctx matching apply()'s expected 0.1.7 shape --------
   const searchProviders = [];
   const fetchProviders = [];
+  const eventHandlers = {};
   ctx = {
-    inject(deps, cb) {
-      assert(Array.isArray(deps) && deps.includes('settings'), "apply() must inject ['settings']");
-      cb({ settings: { installSection: () => { installSectionCalls++; } } });
+    on(event, handler) {
+      (eventHandlers[event] ??= []).push(handler);
     },
     web: {
       registerSearchProvider(p) {
@@ -79,13 +86,24 @@ try {
   assert(mod.WEB_SEARCH_PROVIDER_ID === 'web', `WEB_SEARCH_PROVIDER_ID: got ${JSON.stringify(mod.WEB_SEARCH_PROVIDER_ID)}`);
   assert(mod.LOCAL_FETCH_PROVIDER_ID === 'local', `LOCAL_FETCH_PROVIDER_ID: got ${JSON.stringify(mod.LOCAL_FETCH_PROVIDER_ID)}`);
 
-  const defaults = mod.Config();
-  const config = { ...defaults, corpusDirs: [corpusDir], indexDir };
-  assert(Array.isArray(config.corpusDirs), 'Config() defaults must include corpusDirs array');
+  // 0.1.7 config model: Config() yields live volatile refs, not plain values.
+  const config = mod.Config();
+  for (const field of ['corpusDirs', 'include', 'exclude', 'indexDir', 'maxResults', 'snippetLength', 'engine', 'autoReindex', 'maxFileSizeBytes']) {
+    assert(typeof config[field]?.get === 'function', `Config() field '${field}' must be a volatile ref exposing .get()`);
+  }
+  assert(Array.isArray(config.corpusDirs.get()), `Config() corpusDirs default must be an array: got ${JSON.stringify(config.corpusDirs.get())}`);
+  // Seed the temp dirs through the volatile write symbol, the way the 0.1.7
+  // host loader re-resolves volatile fields in place.
+  config.corpusDirs[VOLATILE_WRITE]([corpusDir]);
+  config.indexDir[VOLATILE_WRITE](indexDir);
   mod.apply(ctx, config);
 
+  // apply() must observe the 0.1.7 volatile-update event (no settings seam).
+  assert(
+    (eventHandlers['loader/volatile-update'] ?? []).length >= 1,
+    'apply() must register a loader/volatile-update handler',
+  );
   // Providers registered by apply().
-  assert(installSectionCalls === 1, `settings.installSection called once: got ${installSectionCalls}`);
   assert(searchProviders.length === 2, `two search providers registered: got ${searchProviders.length}`);
   const local = searchProviders.find((p) => p.id === 'local');
   const web = searchProviders.find((p) => p.id === 'web');
@@ -122,6 +140,15 @@ try {
   const engine = typeof ctx.__localSearchEngine === 'function' ? ctx.__localSearchEngine() : undefined;
   const backend = engine ? engine.driverKind() : 'unknown';
   assert(backend === 'fts5' || backend === 'json', `driverKind is fts5|json: got ${JSON.stringify(backend)}`);
+
+  // Volatile update lifecycle: mutate a ref in place and fire the registered
+  // handler, exactly as the 0.1.7 loader emits `loader/volatile-update`;
+  // apply() must pick the change up (rebuild the engine) without re-running.
+  config.maxResults[VOLATILE_WRITE](42);
+  assert(config.maxResults.get() === 42, `volatile write must update the live ref: got ${JSON.stringify(config.maxResults.get())}`);
+  for (const handler of eventHandlers['loader/volatile-update'] ?? []) handler([['maxResults']]);
+  const engineAfter = ctx.__localSearchEngine ? ctx.__localSearchEngine() : undefined;
+  assert(engineAfter !== engine, 'a volatile update must trigger an engine rebuild');
 
   if (failures.length > 0) {
     for (const f of failures) console.error(`FAIL: ${f}`);
