@@ -71,7 +71,7 @@ function makeCtx(
   };
   const ctx = {
     locale: { register: (ns: string, dict: unknown) => void (localeReg[ns] = dict) },
-    settingsScope: { bind: () => scopeStub },
+    configForms: { get: () => scopeStub },
     effect: () => {},
     slots: {
       inject: (_name: string, thunk: () => Generator<SlotReg>) => {
@@ -154,7 +154,7 @@ describe('client bundle (lib/client.js)', () => {
     const mod = loaded!.factory((name: string) => (name === 'react' ? stubReact : {}));
     expect(typeof mod.apply).toBe('function');
     expect(Array.isArray(mod.inject)).toBe(true);
-    expect(mod.inject).toContain('settingsScope');
+    expect(mod.inject).toContain('configForms');
     expect(mod.inject).toContain('slots');
   });
 

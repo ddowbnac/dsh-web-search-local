@@ -48,24 +48,99 @@ class MockWeb {
   }
 }
 
-function mockCtx() {
-  const web = new MockWeb();
-  const ctx = {
-    web,
-    get: (n: string) => (n === 'dshHomePath' ? (s: string) => join(tmpdir(), 'dsh-home', s) : undefined),
-    inject: (deps: string[], cb: (c: any) => void) => {
-      if (deps.includes('settings')) {
-        cb({
-          settings: {
-            installSection: (_owner: unknown, _ns: string, _schema: unknown, entry: unknown, hooks: any) => {
-              hooks.setSource(() => entry);
-            },
-          },
-        });
-      }
+// cosmokit's volatile write marker (global symbol shared across inlined refs).
+const VOLATILE_WRITE = Symbol.for('cosmokit.volatile.write');
+
+/** A single 0.1.7 volatile ref (cosmokit `createVolatile` shape): live value read via `.get()`. */
+type VolatileRef<T> = { readonly get: () => T; [VOLATILE_WRITE]: (v: T) => void };
+
+type Engine = 'auto' | 'duckduckgo' | 'searxng';
+
+interface VolatileConfig {
+  readonly corpusDirs: VolatileRef<string[]>;
+  readonly include: VolatileRef<string[]>;
+  readonly exclude: VolatileRef<string[]>;
+  readonly indexDir: VolatileRef<string>;
+  readonly maxResults: VolatileRef<number>;
+  readonly snippetLength: VolatileRef<number>;
+  readonly engine: VolatileRef<Engine>;
+  readonly autoReindex: VolatileRef<boolean>;
+  readonly maxFileSizeBytes: VolatileRef<number>;
+}
+
+type EngineHandle = { corpusDirs(): string[]; dispose(): Promise<void> };
+
+/** The boot ctx seam: everything `apply` can legally use here, plus the `__localSearchEngine` handle it defines. */
+type BootContext = {
+  web: MockWeb;
+  on: (event: string, handler: (paths: string[][]) => void) => void;
+  get: (n: string) => ((s: string) => string) | undefined;
+  __localSearchEngine: () => EngineHandle;
+};
+
+/**
+ * Build a 0.1.7 volatile-shaped config: each of the 9 `Config` fields is a live ref read
+ * via `.get()`, seeded from plain values. Mutate the underlying value through the
+ * `cosmokit.volatile.write` symbol the way the 0.1.7 host loader re-resolves volatile
+ * fields in place (no apply re-run).
+ */
+function withRefs(seed: {
+  corpusDirs: string[];
+  include?: string[];
+  exclude?: string[];
+  indexDir?: string;
+  maxResults?: number;
+  snippetLength?: number;
+  engine?: Engine;
+  autoReindex?: boolean;
+  maxFileSizeBytes?: number;
+}): { config: VolatileConfig } {
+  let corpusDirs = [...seed.corpusDirs];
+  let include = [...(seed.include ?? [])];
+  let exclude = [...(seed.exclude ?? [])];
+  let indexDir = seed.indexDir ?? '';
+  let maxResults = seed.maxResults ?? 20;
+  let snippetLength = seed.snippetLength ?? 160;
+  let engine: Engine = seed.engine ?? 'auto';
+  let autoReindex = seed.autoReindex ?? true;
+  let maxFileSizeBytes = seed.maxFileSizeBytes ?? 5_000_000;
+  const ref = <T>(initial: T): VolatileRef<T> => ({
+    get: () => initial,
+    [VOLATILE_WRITE]: (v: T) => void (initial = v),
+  });
+  return {
+    config: {
+      corpusDirs: ref(corpusDirs),
+      include: ref(include),
+      exclude: ref(exclude),
+      indexDir: ref(indexDir),
+      maxResults: ref(maxResults),
+      snippetLength: ref(snippetLength),
+      engine: ref(engine),
+      autoReindex: ref(autoReindex),
+      maxFileSizeBytes: ref(maxFileSizeBytes),
     },
   };
-  return ctx;
+}
+
+function mockCtx(): { ctx: BootContext; events: Record<string, Array<() => void>> } {
+  const web = new MockWeb();
+  const events: Record<string, Array<() => void>> = {};
+  const ctx = {
+    web,
+    on: (event: string, handler: (paths: string[][]) => void) => {
+      (events[event] ??= []).push(() => handler([] as string[][]));
+    },
+    get: (n: string) => (n === 'dshHomePath' ? (s: string) => join(tmpdir(), 'dsh-home', s) : undefined),
+  } as BootContext; // `apply` defines `__localSearchEngine` on the ctx at runtime.
+  return { ctx, events };
+}
+
+function boot(seed: { corpusDirs: string[]; indexDir: string }) {
+  const { ctx, events } = mockCtx();
+  const { config } = withRefs({ corpusDirs: seed.corpusDirs, indexDir: seed.indexDir });
+  apply(ctx, config as any); // the harness refs carry no cosmokit provenance; `apply` only reads `.get()`.
+  return { ctx, events, config };
 }
 
 describe('plugin entry', () => {
@@ -80,8 +155,7 @@ describe('plugin entry', () => {
     const dir = mkdtempSync(join(tmpdir(), 'dsh-boot-'));
     try {
       makeCorpus(dir);
-      const ctx: any = mockCtx();
-      apply(ctx, { corpusDirs: [dir], indexDir: join(dir, 'idx') } as any);
+      const { ctx } = boot({ corpusDirs: [dir], indexDir: join(dir, 'idx') });
 
       expect(ctx.web.searchProviders.has('local')).toBe(true);
       expect(ctx.web.fetchProviders.has('local')).toBe(true);
@@ -105,12 +179,39 @@ describe('plugin entry', () => {
     const dir = mkdtempSync(join(tmpdir(), 'dsh-boot-'));
     try {
       makeCorpus(dir);
-      const ctx: any = mockCtx();
-      apply(ctx, { corpusDirs: [dir], indexDir: join(dir, 'idx') } as any);
+      const { ctx } = boot({ corpusDirs: [dir], indexDir: join(dir, 'idx') });
       const res = await ctx.web.search({ query: 'index', maxResults: 1 });
       expect(res.sources.length).toBeLessThanOrEqual(1);
       expect(typeof res.truncated).toBe('boolean');
       await ctx.__localSearchEngine().dispose();
+    } finally {
+      await cleanup(dir);
+    }
+  });
+
+  test('a volatile config change flows live without apply being re-run', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-boot-'));
+    try {
+      makeCorpus(dir);
+      const { ctx, events, config } = boot({ corpusDirs: [], indexDir: join(dir, 'idx') });
+
+      // Materialize the engine over the initial (empty) corpus.
+      const res1 = await ctx.web.search({ query: 'rust' });
+      expect(res1.sources.length).toBe(0);
+      const before = ctx.__localSearchEngine();
+
+      // The 0.1.7 host updates the volatile ref in place and emits `loader/volatile-update`
+      // on the fiber (no apply re-run): the plugin must re-resolve on the next build.
+      config.corpusDirs[VOLATILE_WRITE]([dir]);
+      (events['loader/volatile-update'] ?? []).forEach((h) => h());
+
+      const after = ctx.__localSearchEngine();
+      expect(after).not.toBe(before);
+      expect(after.corpusDirs()).toEqual([dir]);
+      const res2 = await ctx.web.search({ query: 'rust' });
+      expect(res2.sources.length).toBeGreaterThan(0);
+
+      await after.dispose();
     } finally {
       await cleanup(dir);
     }
