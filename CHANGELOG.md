@@ -1,3 +1,12 @@
+## [1.1.4](https://github.com/ddowbnac/dsh-web-search-local/compare/v1.1.3...v1.1.4) (2026-09-29)
+
+
+### Bug Fixes
+
+* **deps:** re-resolve bun.lock peer pins to the declared 0.1.7-rc.2 range ([e99c7ed](https://github.com/ddowbnac/dsh-web-search-local/commit/e99c7ed4cd89a63e10c15fc22834eedf97f2ea73))
+* **deps:** write bun.lock in the v1 lockfile format for the bun 1.3 CI leg ([8945850](https://github.com/ddowbnac/dsh-web-search-local/commit/894585015026267989fd395221da0f83148690a6))
+* port to the dsh 0.1.7 settings model (volatile config + configForms) ([ea49e22](https://github.com/ddowbnac/dsh-web-search-local/commit/ea49e220c2eec65c5e78940866596adf13fd77e1))
+
 ## [1.1.3](https://github.com/ddowbnac/dsh-web-search-local/compare/v1.1.2...v1.1.3) (2026-09-12)
 
 
