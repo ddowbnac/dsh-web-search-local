@@ -31,7 +31,7 @@
   },
   "devDependencies": {
     "@deepseek-ai/dsh-web": "^0.1.7-rc.2",
-    "@deepseek-ai/schemastery": "^3.18.3",
+    "@deepseek-ai/schemastery": "^3.18.5",
     "@semantic-release/changelog": "7.0.0",
     "@semantic-release/commit-analyzer": "13.0.1",
     "@semantic-release/git": "11.0.1",
